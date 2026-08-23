@@ -1,0 +1,29 @@
+# --- Secrets ---
+.env
+.env.local
+
+# --- Python ---
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# --- Database (SQLite lives in a Docker volume, never in git) ---
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# --- Node / Next.js ---
+node_modules/
+.next/
+out/
+next-env.d.ts
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
