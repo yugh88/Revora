@@ -330,6 +330,8 @@ revora/
 │   │       └── compliance_rules.yaml    # contact-time, blocklist, frequency-cap, urgency rules — Section 7
 │   └── tests/
 │       ├── test_state_machine.py
+│       ├── test_local_simulation_gateway.py
+│       ├── test_synthetic_data_generator.py
 │       ├── test_idempotency.py
 │       ├── test_policy_engine.py
 │       └── test_batch_fault_isolation.py
