@@ -2,7 +2,6 @@
 #
 # Deliberately minimal. Per BUILD_SPEC Section 15, later sessions append their
 # own dependencies to this file as they are actually needed:
-#   session 3  -> scikit-learn, joblib   (ML diagnosis classifier, Section 4a)
 #   session 5  -> razorpay               (RazorpayTestGateway, Section 5)
 #   session 8  -> jinja2, pyyaml         (template engine, Section 7)
 #   promise_tracker -> apscheduler       (Section 4)
@@ -17,6 +16,13 @@ sqlalchemy==2.0.36
 pydantic==2.10.4
 pydantic-settings==2.7.0
 python-dotenv==1.0.1
+
+# --- ML: the single self-trained classifier of Section 4a ---
+# A shallow decision tree, trained offline on our own synthetic data. No LLM,
+# no external AI API, no second model. numpy arrives as a scikit-learn
+# dependency and is not pinned separately.
+scikit-learn==1.6.0
+joblib==1.4.2
 
 # --- test ---
 pytest==8.3.4
