@@ -332,6 +332,9 @@ revora/
 │       ├── test_state_machine.py
 │       ├── test_local_simulation_gateway.py
 │       ├── test_synthetic_data_generator.py
+│       ├── test_diagnosis_engine.py
+│       ├── test_probability_engine.py
+│       ├── test_decision_engine.py
 │       ├── test_idempotency.py
 │       ├── test_policy_engine.py
 │       └── test_batch_fault_isolation.py
