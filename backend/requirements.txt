@@ -25,4 +25,7 @@ scikit-learn==1.6.0
 joblib==1.4.2
 
 # --- test ---
+# httpx is required by fastapi.testclient.TestClient; it is a TEST dependency
+# only and is never imported by application code.
 pytest==8.3.4
+httpx==0.28.1

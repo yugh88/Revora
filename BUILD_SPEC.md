@@ -337,7 +337,11 @@ revora/
 │       ├── test_decision_engine.py
 │       ├── test_idempotency.py
 │       ├── test_policy_engine.py
-│       └── test_batch_fault_isolation.py
+│       ├── test_batch.py
+│       ├── test_batch_fault_isolation.py
+│       ├── test_exceptions.py
+│       ├── test_audit.py
+│       └── test_logging_config.py
 │
 └── frontend/
     ├── package.json

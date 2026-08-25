@@ -24,6 +24,9 @@ all of which are consequences of requirements stated elsewhere in the spec:
   present at detection, is stopped before any reasoning spend.
 * ``diagnosing -> stopped`` / ``diagnosing -> unrecoverable`` — Section 6:
   ``issuer_declined`` and ``bank_rejected`` are "no retry, immediate stop".
+* ``diagnosing -> recovered`` — Section 9's pre-execution re-check fires after
+  diagnosis and before any action; an event found already paid upstream settles
+  straight to recovered without the engine ever acting.
 * ``stopped -> recovered`` — Section 9's ``recovered_externally`` case: the
   customer paid on their own. The engine correctly declined to act; the money
   still arrived, and the ledger must say so.
@@ -88,6 +91,15 @@ ALLOWED_TRANSITIONS: dict[EventStatus, frozenset[EventStatus]] = {
             EventStatus.ESCALATED,
             EventStatus.STOPPED,
             EventStatus.UNRECOVERABLE,
+            # Section 9's pre-execution re-check runs AFTER diagnosis and BEFORE
+            # any action: "If already resolved/cancelled/paid externally -> stop
+            # immediately, log recovered_externally". An event discovered to be
+            # already paid at that moment is in `diagnosing`, so without this
+            # edge the recovered_externally path is unreachable and every
+            # externally-settled event raises instead of settling. Session 1
+            # added `stopped -> recovered` for the same case but missed that the
+            # re-check fires a step earlier. Found by the Session 4 batch run.
+            EventStatus.RECOVERED,
         }
     ),
     EventStatus.INTERVENING: frozenset(
