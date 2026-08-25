@@ -201,20 +201,37 @@ def _simulate_contact_response(
 
 
 def build_gateway(gateway: GatewayUsed, seed: int = 42) -> PaymentGateway:
-    """Construct the requested gateway.
+    """Construct the requested gateway. Section 5's runtime toggle.
 
-    ``razorpay_test`` is Session 5. Refusing explicitly is better than silently
-    falling back to the simulator and reporting sandbox numbers that never came
-    from the sandbox.
+    Both implementations satisfy the same interface, so nothing downstream —
+    diagnosis, scoring, the policy gate, locks, idempotency, the state machine,
+    the audit trail — changes between them. Only the execution call differs.
+
+    ``local_simulation`` is the default and needs no credentials. Selecting
+    ``razorpay_test`` without configured test keys is reported as a 400 rather
+    than silently falling back to the simulator, which would let the response
+    claim sandbox numbers that never came from the sandbox.
     """
     if gateway == GatewayUsed.LOCAL_SIMULATION:
         return LocalSimulationGateway(seed=seed)
-    raise HTTPException(
-        status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
-        detail=(
-            "RazorpayTestGateway is not implemented yet (BUILD_SPEC Section 15, "
-            "session 5). Use gateway=local_simulation."
-        ),
+
+    if gateway == GatewayUsed.RAZORPAY_TEST:
+        from app.gateways.razorpay_test import (
+            RazorpayConfigurationError,
+            RazorpayTestGateway,
+        )
+
+        try:
+            return RazorpayTestGateway()
+        except RazorpayConfigurationError as exc:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+
+    raise HTTPException(  # pragma: no cover - unreachable while the enum has two members
+        status_code=http_status.HTTP_400_BAD_REQUEST,
+        detail=f"Unknown gateway {gateway!r}.",
     )
 
 

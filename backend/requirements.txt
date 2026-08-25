@@ -2,7 +2,6 @@
 #
 # Deliberately minimal. Per BUILD_SPEC Section 15, later sessions append their
 # own dependencies to this file as they are actually needed:
-#   session 5  -> razorpay               (RazorpayTestGateway, Section 5)
 #   session 8  -> jinja2, pyyaml         (template engine, Section 7)
 #   promise_tracker -> apscheduler       (Section 4)
 #
@@ -16,6 +15,12 @@ sqlalchemy==2.0.36
 pydantic==2.10.4
 pydantic-settings==2.7.0
 python-dotenv==1.0.1
+
+# --- Razorpay TEST-mode sandbox, Section 5 ---
+# The official free sandbox, not a paid third party. Only ever imported by
+# gateways/razorpay_test.py, and only when the user selects that gateway. The
+# default path (LocalSimulationGateway) never touches it.
+razorpay==1.4.2
 
 # --- ML: the single self-trained classifier of Section 4a ---
 # A shallow decision tree, trained offline on our own synthetic data. No LLM,

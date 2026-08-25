@@ -142,18 +142,37 @@ class TestBatchSizing:
 
 
 class TestGatewaySelection:
-    def test_razorpay_is_refused_until_session_5(self, db_session):
-        """Silently falling back to the simulator would let the response claim
-        sandbox numbers that never came from the sandbox."""
+    def test_razorpay_without_credentials_is_refused_not_downgraded(self, db_session):
+        """Session 5 implemented the gateway, so the 501 became a 400.
+
+        The property under test is unchanged and is the one that matters:
+        selecting the sandbox without credentials must FAIL, never silently fall
+        back to the simulator. A fallback would let the response claim sandbox
+        numbers that never came from the sandbox.
+        """
         from fastapi import HTTPException
 
+        from app.config import Settings
+        from app.routers import batch as batch_module
+
         with pytest.raises(HTTPException) as excinfo:
-            run_batch(
-                db_session,
-                BatchRequest(count=5, gateway=GatewayUsed.RAZORPAY_TEST),
-                load_ml=False,
-            )
-        assert excinfo.value.status_code == 501
+            batch_module.build_gateway(GatewayUsed.RAZORPAY_TEST)
+
+        assert excinfo.value.status_code == 400
+        assert "local_simulation" in str(excinfo.value.detail)
+
+    def test_razorpay_selection_never_returns_the_simulator(self, db_session):
+        """The failure mode this guards against is a silent downgrade."""
+        from fastapi import HTTPException
+
+        from app.gateways.local_simulation import LocalSimulationGateway
+        from app.routers import batch as batch_module
+
+        try:
+            gateway = batch_module.build_gateway(GatewayUsed.RAZORPAY_TEST)
+        except HTTPException:
+            return  # refused, which is correct without credentials
+        assert not isinstance(gateway, LocalSimulationGateway)
 
     def test_the_gateway_is_recorded_on_the_response(self, _shared):
         _, response = _shared
