@@ -346,11 +346,15 @@ revora/
 │
 └── frontend/
     ├── package.json
+    ├── tsconfig.json                         # required: TypeScript config for .tsx
     ├── Dockerfile
     ├── next.config.js
     ├── tailwind.config.js
+    ├── postcss.config.js                     # required: Tailwind runs via PostCSS
+    ├── .eslintrc.json                        # required: `npm run lint`
     ├── .env.local.example                    # NEXT_PUBLIC_API_URL
     ├── app/
+    │   ├── globals.css                       # required: Tailwind directives + theme tokens
     │   ├── layout.tsx
     │   ├── page.tsx                          # "/" dashboard, Section 13 item 1
     │   ├── events/

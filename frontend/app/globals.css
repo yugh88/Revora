@@ -1,0 +1,144 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Revora design tokens.
+ *
+ * One token set, two value sets. Light and dark are not two designs — they are
+ * the same design with different luminance, which is why the dark theme does
+ * not end up as washed-out grey text on grey cards.
+ *
+ * Accent is a single restrained indigo. The saturated colours are reserved for
+ * money states (Section 13: amber = pending, green = recovered, red =
+ * unrecoverable, grey = stopped), so colour always means something.
+ */
+
+@layer base {
+  :root {
+    --bg: 240 20% 99%;
+    --surface: 0 0% 100%;
+    --surface-raised: 0 0% 100%;
+    --line: 240 12% 90%;
+    --line-strong: 240 10% 83%;
+
+    --ink: 235 22% 12%;
+    --ink-muted: 235 10% 40%;
+    --ink-subtle: 235 8% 54%;
+
+    --accent: 243 65% 56%;
+    --accent-soft: 243 90% 96%;
+    --accent-ink: 0 0% 100%;
+
+    --recovered: 158 68% 34%;
+    --pending: 35 88% 45%;
+    --unrecoverable: 0 68% 50%;
+    --stopped: 235 8% 54%;
+
+    --shadow: 235 30% 20%;
+    --grid: 240 12% 92%;
+  }
+
+  .dark {
+    /* Deep neutral with a trace of blue — pure #000 makes elevation
+       impossible to read, and pure grey looks lifeless on an OLED panel. */
+    --bg: 235 22% 7%;
+    --surface: 235 20% 10%;
+    --surface-raised: 235 18% 13%;
+    --line: 235 14% 20%;
+    --line-strong: 235 13% 27%;
+
+    --ink: 240 20% 97%;
+    --ink-muted: 235 12% 72%;
+    --ink-subtle: 235 10% 58%;
+
+    --accent: 243 85% 72%;
+    --accent-soft: 243 40% 18%;
+    --accent-ink: 235 40% 10%;
+
+    --recovered: 158 62% 50%;
+    --pending: 38 92% 58%;
+    --unrecoverable: 0 72% 63%;
+    --stopped: 235 10% 58%;
+
+    --shadow: 235 60% 2%;
+    --grid: 235 14% 18%;
+  }
+
+  * {
+    border-color: hsl(var(--line));
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: hsl(var(--bg));
+    color: hsl(var(--ink));
+    /* System stack by design: it renders instantly, needs no network at build
+       or runtime, and on every modern OS it is a genuinely excellent UI face. */
+    font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI Variable Text',
+      'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-feature-settings: 'cv01', 'cv03', 'ss01';
+  }
+
+  /* Money and counts must not jitter as digits change. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum';
+  }
+
+  :focus-visible {
+    outline: 2px solid hsl(var(--accent));
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  ::selection {
+    background: hsl(var(--accent) / 0.22);
+  }
+}
+
+@layer utilities {
+  /* Hairline top highlight — reads as a light source above the card. One
+     pixel, no gradient wash. */
+  .edge-light {
+    box-shadow: inset 0 1px 0 0 hsl(0 0% 100% / 0.55);
+  }
+
+  .dark .edge-light {
+    box-shadow: inset 0 1px 0 0 hsl(0 0% 100% / 0.045);
+  }
+
+  .stagger-1 {
+    animation-delay: 60ms;
+  }
+  .stagger-2 {
+    animation-delay: 120ms;
+  }
+  .stagger-3 {
+    animation-delay: 180ms;
+  }
+  .stagger-4 {
+    animation-delay: 240ms;
+  }
+}
+
+/*
+ * Reduced motion is honoured globally rather than component by component, so a
+ * later session cannot accidentally reintroduce motion for someone who asked
+ * for none.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
