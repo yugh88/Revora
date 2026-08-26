@@ -10,10 +10,19 @@
  */
 
 import type {
+  AuditListResponse,
+  AuditQuery,
   BatchRequest,
   BatchResponse,
+  EventDetailResponse,
+  EventListQuery,
+  EventListResponse,
   EventType,
   HealthResponse,
+  PolicyListResponse,
+  PolicyUpdate,
+  PolicyOut,
+  ScriptResponse,
 } from './types';
 
 /**
@@ -142,10 +151,67 @@ async function request<T>(
   return (await response.json()) as T;
 }
 
+/** Build a query string, dropping undefined/empty values rather than sending them. */
+function buildQuery(query: object): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value === undefined || value === null || value === '') continue;
+    params.set(key, String(value));
+  }
+  const search = params.toString();
+  return search ? `?${search}` : '';
+}
+
 export const api = {
   /** GET /health — cheap liveness probe for the connectivity indicator. */
   health(): Promise<HealthResponse> {
     return request<HealthResponse>('/health', { method: 'GET' }, 5_000);
+  },
+
+  /**
+   * GET /events — the risk-event feed.
+   *
+   * Filtering is server-side; every key of EventListQuery is a real query
+   * parameter on the backend. Undefined values are dropped rather than sent as
+   * the string "undefined".
+   */
+  listEvents(query: EventListQuery = {}): Promise<EventListResponse> {
+    return request<EventListResponse>(`/events${buildQuery(query)}`, { method: 'GET' });
+  },
+
+  /** GET /events/{id} — one event, end to end. */
+  getEvent(eventId: string): Promise<EventDetailResponse> {
+    return request<EventDetailResponse>(`/events/${encodeURIComponent(eventId)}`, {
+      method: 'GET',
+    });
+  },
+
+  /** GET /audit — the searchable immutable log. */
+  listAudit(query: AuditQuery = {}): Promise<AuditListResponse> {
+    return request<AuditListResponse>(`/audit${buildQuery(query)}`, { method: 'GET' });
+  },
+
+  /** GET /policies — effective policy for every event type. */
+  getPolicies(merchantId?: string): Promise<PolicyListResponse> {
+    return request<PolicyListResponse>(
+      `/policies${buildQuery({ merchant_id: merchantId })}`,
+      { method: 'GET' },
+    );
+  },
+
+  /** PUT /policies — saves a NEW policy version; the previous one survives. */
+  updatePolicy(body: PolicyUpdate): Promise<PolicyOut> {
+    return request<PolicyOut>('/policies', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    });
+  },
+
+  /** GET /scripts/{id} — compliance-checked script. Read-only, no side effects. */
+  getScript(eventId: string): Promise<ScriptResponse> {
+    return request<ScriptResponse>(`/scripts/${encodeURIComponent(eventId)}`, {
+      method: 'GET',
+    });
   },
 
   /**
@@ -220,6 +286,51 @@ export function formatPercent(rate: number, digits = 1): string {
 
 export function formatCount(value: number): string {
   return new Intl.NumberFormat('en-IN').format(value);
+}
+
+/** "3 days ago" — relative time, with the exact stamp always available alongside. */
+export function formatRelative(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '—';
+  const seconds = Math.round((Date.now() - then) / 1000);
+  if (seconds < 45) return 'just now';
+  const units: Array<[number, Intl.RelativeTimeFormatUnit]> = [
+    [60, 'second'],
+    [3600, 'minute'],
+    [86400, 'hour'],
+    [2592000, 'day'],
+    [31536000, 'month'],
+  ];
+  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+  let value = seconds;
+  let unit: Intl.RelativeTimeFormatUnit = 'second';
+  for (let i = 0; i < units.length; i += 1) {
+    const [limit, name] = units[i];
+    if (Math.abs(seconds) < limit) {
+      unit = name;
+      const divisor = i === 0 ? 1 : units[i - 1][0];
+      value = Math.round(seconds / divisor);
+      break;
+    }
+    if (i === units.length - 1) {
+      unit = 'year';
+      value = Math.round(seconds / limit);
+    }
+  }
+  return formatter.format(-value, unit);
+}
+
+/** "23 Aug 2026, 14:32" — the exact stamp, for titles and detail pages. */
+export function formatDateTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleString(undefined, {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 /** "14:32:07" — runs are seconds apart, so the time of day is what identifies one. */

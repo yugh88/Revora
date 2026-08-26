@@ -1,0 +1,94 @@
+# Compliance rules. BUILD_SPEC Section 7.
+#
+# These four rules are what stop Revora being a dressed-up spam cannon. They are
+# configuration, not code, so an auditor can read what the system will and will
+# not do without opening a Python file — and so changing a rule is a reviewable
+# diff rather than a code change.
+#
+# Every rule is CHECKED and RECORDED on every script generation. A script that
+# fails any rule is not rendered at all; the engine returns the failure instead.
+# There is no "warn and send".
+
+version: 1
+
+# --- Rule 1: contact-time restriction -------------------------------------- #
+# Section 7: "Contact-time restriction (8am-7pm IST)".
+# Enforced on IST local time regardless of server timezone, because the person
+# receiving the message is in India.
+contact_window:
+  rule_id: contact_time_window
+  description: Scripts may only be generated for contact between 08:00 and 19:00 IST.
+  timezone: Asia/Kolkata
+  utc_offset_minutes: 330
+  start_hour: 8
+  end_hour: 19
+  failure_message: >-
+    Outside the permitted contact window (08:00-19:00 IST). No script generated.
+
+# --- Rule 2: no coercive or threatening language ---------------------------- #
+# A blocklist applied to the RENDERED output, not to the template source. A
+# template is safe or unsafe only once its slots are filled, and a customer name
+# or a merchant name could in principle carry a blocked term.
+language:
+  rule_id: no_coercive_language
+  description: Rendered scripts must not threaten, intimidate or imply legal or social consequence.
+  failure_message: Rendered script contained prohibited coercive language.
+  blocklist:
+    - legal action
+    - lawsuit
+    - sue you
+    - court
+    - police
+    - arrest
+    - criminal
+    - blacklist
+    - defaulter
+    - seize
+    - recovery agent
+    - consequences will
+    - we will not hesitate
+    - final warning
+    - immediately or else
+    - your credit score will
+    - report you
+    - shame
+    - embarrass
+  # Permitted even though they contain a blocked substring. "report" alone is
+  # ordinary language; "report you" is not.
+  allowlist_phrases:
+    - report a problem
+    - report an issue
+
+# --- Rule 3: frequency cap -------------------------------------------------- #
+# Section 7: "Frequency cap: check StoppingRuleState.attempts_used against
+# Policy.contact_limit_per_channel before generating."
+# Checked BEFORE rendering, so an over-cap event never produces text that could
+# then be sent by mistake.
+frequency:
+  rule_id: frequency_cap
+  description: >-
+    StoppingRuleState.attempts_used must be below the merchant's
+    Policy.contact_limit_per_channel before a script is generated.
+  failure_message: >-
+    Contact limit reached for this event. Generating another script would
+    breach the merchant's configured frequency cap.
+
+# --- Rule 4: no false urgency ----------------------------------------------- #
+# Urgency is not a stylistic choice. It must correspond to the escalation level
+# the policy engine actually reached, so a first friendly reminder can never be
+# dressed up as a final notice.
+urgency:
+  rule_id: no_false_urgency
+  description: Urgency must match the escalation level recorded on StoppingRuleState.
+  failure_message: >-
+    Requested urgency exceeds the escalation level this event has actually
+    reached.
+  # escalation_level -> the highest urgency permitted at that level
+  permitted_by_escalation_level:
+    0: low
+    1: medium
+    2: high
+  urgency_rank:
+    low: 0
+    medium: 1
+    high: 2

@@ -341,6 +341,10 @@ revora/
 │       ├── test_batch.py
 │       ├── test_batch_fault_isolation.py
 │       ├── test_exceptions.py
+│       ├── test_events.py
+│       ├── test_template_engine.py
+│       ├── test_policies.py
+│       ├── test_scripts.py
 │       ├── test_audit.py
 │       └── test_logging_config.py
 │
@@ -367,6 +371,7 @@ revora/
     │   └── policies/page.tsx
     ├── components/
     │   ├── ui/                               # shadcn/ui generated components
+    │   │                                     #   incl. site-header.tsx (shared nav shell)
     │   ├── KpiCard.tsx
     │   ├── RecoveryChart.tsx
     │   ├── DirectionBreakdown.tsx

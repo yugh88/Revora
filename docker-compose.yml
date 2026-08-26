@@ -1,0 +1,79 @@
+# Revora — full stack. BUILD_SPEC Sections 3 and 12.
+#
+#   Next.js (web) → FastAPI (api) → SQLite on a volume
+#
+# Two services and one volume. No Redis, no Kafka, no Postgres, no message
+# broker: the architecture in Section 3 is deliberately small, and the gateway
+# abstraction underneath is where the interesting substitution happens.
+#
+#   docker compose up --build
+#   web  → http://localhost:3000
+#   api  → http://localhost:8000/docs
+#
+# The browser only ever talks to :3000. Next proxies /api/backend/* to the api
+# service server-side (frontend/next.config.js), which is why the backend needs
+# no CORS middleware and why the API port does not have to be reachable from the
+# user's machine at all.
+
+services:
+  api:
+    build:
+      context: ./backend
+    container_name: revora-api
+    environment:
+      # SQLite lives on the named volume mounted at /data, so the ledger, the
+      # audit trail and every decision survive `docker compose down`.
+      DATABASE_URL: sqlite:////data/revora.db
+      # Razorpay TEST-mode credentials are OPTIONAL. Absent, the built-in
+      # simulator (the default gateway) runs unaffected; selecting the sandbox
+      # in the UI returns a clear 400 rather than falling back silently.
+      # Set these in a local .env file next to this compose file — never commit
+      # real values.
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+    volumes:
+      - revora-data:/data
+    ports:
+      # Published for direct API inspection and /docs during a demo. The web
+      # service does not need this — it reaches the api over the compose network.
+      - '8000:8000'
+    healthcheck:
+      # Python rather than curl: the slim base image has no curl, and adding one
+      # just for a healthcheck would grow the image for nothing.
+      test:
+        [
+          'CMD',
+          'python',
+          '-c',
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status==200 else 1)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        # NEXT_PUBLIC_* is inlined at BUILD time, so the value has to be passed
+        # here. It is only used for display (the connectivity indicator) — the
+        # actual request path is the same-origin proxy.
+        NEXT_PUBLIC_API_URL: http://api:8000
+    container_name: revora-web
+    environment:
+      # Read at runtime by next.config.js to target the rewrite at the api
+      # service on the compose network.
+      NEXT_PUBLIC_API_URL: http://api:8000
+    ports:
+      - '3000:3000'
+    depends_on:
+      api:
+        # Wait for /health, not just for the container to exist — otherwise the
+        # first page load races the backend's table creation.
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  revora-data:

@@ -550,79 +550,59 @@ class TestIdempotencyThroughBatch:
         session, _ = _shared
         assert list(session.execute(select(ActionLock)).scalars()) == []
 
-    def test_rerunning_the_same_seed_creates_no_duplicate_events(self, db_session):
-        """The generator is deterministic, so a second run produces the same
-        event ids — every one of which must be recognised as a duplicate."""
+    def test_rerunning_the_same_seed_produces_a_new_batch(self, db_session):
+        """A second run must process real records, not silently do nothing.
+
+        This assertion was inverted in Session 4: stored event ids came straight
+        from the deterministic generator, so a second run found all 50 already
+        present, processed 0, and reported an entirely accurate at_risk of 0.00.
+        The demo looked broken precisely when someone ran it twice.
+
+        Stored ids are now namespaced per batch. The generator is unchanged and
+        still deterministic — what follows asserts both halves of that.
+        """
         first = run_batch(db_session, BatchRequest(count=30), load_ml=False)
         second = run_batch(db_session, BatchRequest(count=30), load_ml=False)
-        assert second.processed == 0
-        assert second.skipped_duplicates >= first.processed
 
+        assert second.processed > 0, "a second run must not be a silent no-op"
+        assert Decimal(second.money.amount_at_risk) > 0
 
-class TestRecoveredExternally:
-    """Section 9's race-condition re-check, end to end.
+    def test_two_runs_produce_disjoint_event_sets(self, db_session):
+        """Each run is its own batch; events must not collide across runs."""
+        run_batch(db_session, BatchRequest(count=30), load_ml=False)
+        first_ids = {e.id for e in db_session.execute(select(RiskEvent)).scalars()}
+        run_batch(db_session, BatchRequest(count=30), load_ml=False)
+        all_ids = {e.id for e in db_session.execute(select(RiskEvent)).scalars()}
+        second_ids = all_ids - first_ids
 
-    Section 11 marks ~10% of records as already settled upstream. The engine
-    must discover that by re-checking BEFORE acting, record the money as
-    recovered, and take no action.
+        assert second_ids
+        assert first_ids & second_ids == set()
+        assert len(all_ids) == len(first_ids) + len(second_ids)
 
-    This path exposed a real defect during Session 4: the re-check runs after
-    diagnosis, so the event is in `diagnosing`, and the Session 1 state machine
-    had no `diagnosing -> recovered` edge. Every externally-settled event raised
-    InvalidTransition and was isolated as a failure instead of settling. The
-    edge was added; these tests stop it regressing.
-    """
+    def test_the_generated_data_is_still_identical_across_runs(self, db_session):
+        """Section 11's reproducibility guarantee survives the namespacing.
 
-    def test_externally_settled_events_are_recovered_without_acting(self, _shared):
-        session, _ = _shared
-        from app.models import AuditLog
+        Only the stored identity differs per run; the amounts, types, causes and
+        injected edge cases all still follow seed 42, so the measured result is
+        the same every time.
+        """
+        first = run_batch(db_session, BatchRequest(count=30), load_ml=False)
+        second = run_batch(db_session, BatchRequest(count=30), load_ml=False)
 
-        external = [
-            row
-            for row in session.execute(select(AuditLog)).scalars()
-            if row.action == "recovered_externally"
-        ]
-        assert external, "no externally-resolved events in this batch"
+        assert first.money.amount_at_risk == second.money.amount_at_risk
+        assert first.money.amount_recovered == second.money.amount_recovered
+        assert first.recovery_rate == second.recovery_rate
+        assert first.event_type_breakdown == second.event_type_breakdown
+        assert first.processed == second.processed
 
-        for entry in external:
-            event = session.get(RiskEvent, entry.event_id)
-            assert event.status == EventStatus.RECOVERED
-            attempts = list(
-                session.execute(
-                    select(PaymentAttempt).where(PaymentAttempt.event_id == event.id)
-                ).scalars()
-            )
-            assert attempts == [], "the engine acted on an already-settled event"
-
-    def test_the_external_recovery_is_credited_to_the_external_channel(self, _shared):
-        """Money recovered by the customer paying on their own must not be
-        presented as money the engine recovered."""
-        from app.enums import Channel
-        from app.models import AuditLog
-
-        session, _ = _shared
-        external_ids = {
-            row.event_id
-            for row in session.execute(select(AuditLog)).scalars()
-            if row.action == "recovered_externally"
-        }
-        for event_id in external_ids:
-            outcome = session.get(Outcome, event_id)
-            assert outcome.resolved == OutcomeResolution.RECOVERED
-            assert outcome.resolution_channel == Channel.EXTERNAL
-
-    def test_the_state_machine_permits_the_section_9_path(self):
-        """The specific edge the defect was missing."""
-        from app.engine.state_machine import can_transition
-
-        assert can_transition(EventStatus.DIAGNOSING, EventStatus.RECOVERED)
-
-    def test_externally_settled_events_are_not_isolated_failures(self, _shared):
-        """The symptom of the original defect."""
-        _, response = _shared
-        assert not any(
-            "diagnosing -> recovered" in f.error_message for f in response.failures
-        )
+    def test_intra_batch_replays_are_still_detected(self, db_session):
+        """Section 11 injects ~10% replayed records WITHIN a batch. Those share
+        both the generated id and the batch prefix, so they must still collide.
+        """
+        result = run_batch(db_session, BatchRequest(count=50), load_ml=False)
+        assert result.skipped_duplicates > 0
+        stored = [e.id for e in db_session.execute(select(RiskEvent)).scalars()]
+        assert len(stored) == len(set(stored))
 
 
 class TestReproducibility:

@@ -11,18 +11,15 @@ import {
   ShieldAlert,
   Target,
   TrendingUp,
-  Wifi,
-  WifiOff,
 } from 'lucide-react';
 
 import { DirectionBreakdown } from '../components/DirectionBreakdown';
 import { KpiCard, type KpiTrend } from '../components/KpiCard';
 import { RecoveryChart } from '../components/RecoveryChart';
 import { DashboardSkeleton } from '../components/SkeletonLoader';
-import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
-import { ThemeToggle } from '../components/ui/theme-toggle';
+import { SiteHeader } from '../components/ui/site-header';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../components/ui/tooltip';
 import { cn } from '../components/ui/utils';
 import {
@@ -35,7 +32,7 @@ import {
   formatInrExact,
   formatPercent,
 } from '../lib/api-client';
-import type { AnalysisRun, BatchResponse } from '../lib/types';
+import type { AnalysisRun, BatchResponse, EventListResponse } from '../lib/types';
 
 /**
  * Revora command centre — BUILD_SPEC Section 13, page 1.
@@ -55,8 +52,6 @@ import type { AnalysisRun, BatchResponse } from '../lib/types';
 
 const RUN_SIZES = [50, 500] as const;
 type RunSize = (typeof RUN_SIZES)[number];
-
-type Connectivity = 'checking' | 'online' | 'offline';
 
 function percentChange(current: number, previous: number): number {
   if (previous === 0) return current === 0 ? 0 : 100;
@@ -87,29 +82,42 @@ function buildTrend(
 
 export default function DashboardPage() {
   const [runs, setRuns] = React.useState<AnalysisRun[]>([]);
+  // Authoritative persisted state, loaded on mount and refreshed after every
+  // run. Without this the dashboard only knew about batches executed in THIS
+  // browser session, so a database holding 42 real events still rendered "no
+  // analysis run yet".
+  const [persisted, setPersisted] = React.useState<EventListResponse | null>(null);
+  const [loadingPersisted, setLoadingPersisted] = React.useState(true);
   const [isRunning, setIsRunning] = React.useState(false);
   const [error, setError] = React.useState<ApiError | null>(null);
   const [size, setSize] = React.useState<RunSize>(50);
-  const [connectivity, setConnectivity] = React.useState<Connectivity>('checking');
 
   const latest: BatchResponse | null = runs.length ? runs[runs.length - 1].response : null;
   const previous: BatchResponse | null =
     runs.length > 1 ? runs[runs.length - 2].response : null;
 
-  /** Read-only liveness probe. Safe to run on mount — it mutates nothing. */
-  const checkHealth = React.useCallback(async () => {
-    setConnectivity('checking');
+  /**
+   * Read-only load of what is already in the ledger.
+   *
+   * Safe to call on mount: GET /events mutates nothing. The money totals are
+   * computed server-side by the same code path /batch uses, so the dashboard
+   * never re-implements "recovery rate" in the browser.
+   */
+  const loadPersisted = React.useCallback(async () => {
+    setLoadingPersisted(true);
     try {
-      await api.health();
-      setConnectivity('online');
-    } catch {
-      setConnectivity('offline');
+      setPersisted(await api.listEvents({ limit: 1 }));
+      setError(null);
+    } catch (caught) {
+      if (caught instanceof ApiError) setError(caught);
+    } finally {
+      setLoadingPersisted(false);
     }
   }, []);
 
   React.useEffect(() => {
-    void checkHealth();
-  }, [checkHealth]);
+    void loadPersisted();
+  }, [loadPersisted]);
 
   const runAnalysis = React.useCallback(async () => {
     setIsRunning(true);
@@ -124,53 +132,30 @@ export default function DashboardPage() {
           response,
         },
       ]);
-      setConnectivity('online');
+      // Re-read the ledger so the KPIs reflect the whole database, not just
+      // the batch that happened to finish last.
+      await loadPersisted();
     } catch (caught) {
       const apiError =
         caught instanceof ApiError
           ? caught
           : new ApiError('Something went wrong while running the analysis.');
       setError(apiError);
-      if (apiError.isNetwork) setConnectivity('offline');
     } finally {
       setIsRunning(false);
     }
-  }, [size]);
+  }, [size, loadPersisted]);
 
-  const money = latest?.money;
-  const activeInterventions = latest
-    ? (latest.status_breakdown.intervening ?? 0) + (latest.status_breakdown.escalated ?? 0)
-    : 0;
-  const previousActive = previous
-    ? (previous.status_breakdown.intervening ?? 0) + (previous.status_breakdown.escalated ?? 0)
-    : null;
+  // KPIs describe EVERYTHING in the ledger, not just the most recent batch.
+  // The batch response is used only for the per-run trend and the run footer.
+  const money = persisted?.money ?? null;
+  const totalEvents = persisted?.total ?? 0;
+  const activeInterventions = persisted?.money.active_interventions ?? 0;
+  const hasData = totalEvents > 0;
 
   return (
     <div className="min-h-screen">
-      {/* ------------------------------------------------------------------ */}
-      {/* Header                                                              */}
-      {/* ------------------------------------------------------------------ */}
-      <header className="sticky top-0 z-40 border-b border-line bg-bg/85 backdrop-blur-xl">
-        <div className="mx-auto flex h-16 max-w-[1400px] items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center gap-3">
-            <RevoraMark />
-            <div className="leading-none">
-              <p className="text-[15px] font-semibold tracking-tight text-ink">Revora</p>
-              <p className="mt-1 hidden text-micro uppercase text-ink-subtle sm:block">
-                Revenue recovery engine
-              </p>
-            </div>
-          </div>
-
-          {/* No navigation links: /events, /batch and the rest are later
-              sessions and do not exist. Rendering them as dead links would be
-              worse than not rendering them. */}
-          <div className="flex items-center gap-2">
-            <ConnectivityPill state={connectivity} onRetry={checkHealth} />
-            <ThemeToggle />
-          </div>
-        </div>
-      </header>
+      <SiteHeader />
 
       {/* ------------------------------------------------------------------ */}
       {/* Body                                                                */}
@@ -213,9 +198,9 @@ export default function DashboardPage() {
         <div className="mt-7">
           {error ? (
             <ErrorState error={error} onRetry={() => void runAnalysis()} busy={isRunning} />
-          ) : isRunning && !latest ? (
+          ) : loadingPersisted || (isRunning && !hasData) ? (
             <DashboardSkeleton />
-          ) : !latest ? (
+          ) : !hasData ? (
             <EmptyState onRun={() => void runAnalysis()} size={size} />
           ) : (
             <div className="space-y-6">
@@ -227,15 +212,11 @@ export default function DashboardPage() {
                       label="Amount at risk"
                       value={formatInr(money!.amount_at_risk)}
                       exactValue={formatInrExact(money!.amount_at_risk)}
-                      context={`across ${formatCount(latest.processed)} processed events`}
+                      context={`across ${formatCount(totalEvents)} events in the ledger`}
                       icon={BadgeIndianRupee}
                       tone="neutral"
                       help="Total value of the events this run detected, summed from the ledger."
-                      trend={buildTrend(
-                        Number.parseFloat(money!.amount_at_risk),
-                        previous ? Number.parseFloat(previous.money.amount_at_risk) : null,
-                        false,
-                      )}
+                      trend={null}
                     />
                   </div>
                   <div className="animate-fade-up stagger-1">
@@ -243,30 +224,22 @@ export default function DashboardPage() {
                       label="Amount recovered"
                       value={formatInr(money!.amount_recovered)}
                       exactValue={formatInrExact(money!.amount_recovered)}
-                      context={`${formatCount(latest.status_breakdown.recovered ?? 0)} events settled`}
+                      context={`${formatInr(money!.amount_pending)} still pending`}
                       icon={TrendingUp}
                       tone="recovered"
                       help="Money actually collected, summed from recovery-ledger rows. Never estimated."
-                      trend={buildTrend(
-                        Number.parseFloat(money!.amount_recovered),
-                        previous ? Number.parseFloat(previous.money.amount_recovered) : null,
-                        true,
-                      )}
+                      trend={null}
                     />
                   </div>
                   <div className="animate-fade-up stagger-2">
                     <KpiCard
                       label="Recovery rate"
-                      value={formatPercent(latest.recovery_rate)}
+                      value={formatPercent(money!.recovery_rate)}
                       context="of amount at risk, from ledger state"
                       icon={Target}
                       tone="accent"
                       help="Amount recovered divided by amount at risk. A 100% rate would be a red flag, not a win."
-                      trend={buildTrend(
-                        latest.recovery_rate,
-                        previous ? previous.recovery_rate : null,
-                        true,
-                      )}
+                      trend={null}
                     />
                   </div>
                   <div className="animate-fade-up stagger-3">
@@ -277,7 +250,7 @@ export default function DashboardPage() {
                       icon={Activity}
                       tone="pending"
                       help="Events the engine is still working: an attempt is in flight, or a human has taken it on."
-                      trend={buildTrend(activeInterventions, previousActive, false)}
+                      trend={null}
                     />
                   </div>
                 </div>
@@ -294,11 +267,20 @@ export default function DashboardPage() {
                   </div>
                 </div>
                 <div className="h-[400px]">
-                  <DirectionBreakdown result={latest} />
+                  <DirectionBreakdown
+                    result={
+                      latest ??
+                      ({
+                        event_type_breakdown: persisted?.type_breakdown ?? {},
+                      } as BatchResponse)
+                    }
+                  />
                 </div>
               </section>
 
-              <RunFooter result={latest} runs={runs.length} />
+              {latest ? <RunFooter result={latest} runs={runs.length} /> : (
+                <LedgerFooter total={totalEvents} needsReview={persisted?.needs_review_count ?? 0} />
+              )}
             </div>
           )}
         </div>
@@ -310,80 +292,6 @@ export default function DashboardPage() {
 /* -------------------------------------------------------------------------- */
 /* Header pieces                                                              */
 /* -------------------------------------------------------------------------- */
-
-function RevoraMark() {
-  return (
-    <span className="flex h-9 w-9 items-center justify-center rounded-[10px] bg-accent shadow-card">
-      {/* An upward recovery arc closing a loop — drawn, not imported, so it
-          themes with the accent token. */}
-      <svg
-        width="20"
-        height="20"
-        viewBox="0 0 20 20"
-        fill="none"
-        aria-hidden="true"
-        className="text-accent-ink"
-      >
-        <path
-          d="M4 13.5C4 8.5 7.5 5 12.5 5H16"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-        />
-        <path
-          d="M12.5 1.8 16 5l-3.5 3.2"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        <circle cx="5" cy="15.5" r="2.2" fill="currentColor" />
-      </svg>
-    </span>
-  );
-}
-
-function ConnectivityPill({
-  state,
-  onRetry,
-}: {
-  state: Connectivity;
-  onRetry: () => void;
-}) {
-  const config = {
-    checking: { variant: 'neutral' as const, text: 'Checking', Icon: Loader2 },
-    online: { variant: 'recovered' as const, text: 'API online', Icon: Wifi },
-    offline: { variant: 'unrecoverable' as const, text: 'API offline', Icon: WifiOff },
-  }[state];
-
-  const { Icon } = config;
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          onClick={onRetry}
-          aria-label={`Backend status: ${config.text}. Click to re-check.`}
-          className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
-        >
-          <Badge variant={config.variant} className="cursor-pointer hover:brightness-105">
-            <Icon
-              className={cn('h-3 w-3', state === 'checking' && 'animate-spin')}
-              aria-hidden="true"
-            />
-            <span className="hidden sm:inline">{config.text}</span>
-          </Badge>
-        </button>
-      </TooltipTrigger>
-      <TooltipContent>
-        <p className="font-medium text-ink">{config.text}</p>
-        <p className="mt-0.5 break-all text-ink-subtle">{BACKEND_URL}</p>
-        <p className="mt-1 text-ink-muted">Click to re-check.</p>
-      </TooltipContent>
-    </Tooltip>
-  );
-}
 
 function SizeSelector({
   value,
@@ -525,6 +433,41 @@ function ErrorState({
  * that shows numbers without saying where they came from is harder to trust,
  * not easier.
  */
+/**
+ * Provenance when the data came from the ledger rather than a run in this tab.
+ *
+ * A dashboard that shows numbers without saying where they came from is harder
+ * to trust, not easier — so this states plainly that these totals are read from
+ * persisted state, including batches run before this page was opened.
+ */
+function LedgerFooter({ total, needsReview }: { total: number; needsReview: number }) {
+  return (
+    <Card className="animate-fade-up stagger-4 bg-surface/60">
+      <div className="flex flex-wrap items-center gap-x-8 gap-y-3 px-5 py-3.5">
+        <div className="flex items-baseline gap-2">
+          <span className="text-micro uppercase text-ink-subtle">Events in ledger</span>
+          <span className="tabular text-xs font-semibold text-ink">{formatCount(total)}</span>
+        </div>
+        <div className="flex items-baseline gap-2">
+          <span className="text-micro uppercase text-ink-subtle">Need review</span>
+          <span
+            className={cn(
+              'tabular text-xs font-semibold',
+              needsReview > 0 ? 'text-pending' : 'text-ink',
+            )}
+          >
+            {formatCount(needsReview)}
+          </span>
+        </div>
+        <div className="ml-auto flex items-center gap-1.5 text-micro uppercase text-ink-subtle">
+          <ShieldAlert className="h-3 w-3" aria-hidden="true" />
+          Read from persisted state, including earlier runs
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 function RunFooter({ result, runs }: { result: BatchResponse; runs: number }) {
   const items: Array<{ label: string; value: string; tone?: 'warn' }> = [
     { label: 'Records', value: formatCount(result.total_records) },

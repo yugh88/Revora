@@ -595,7 +595,13 @@ def _execute_contact(
     """A message to a customer: outcome is their response, modelled here."""
     responded = _simulate_contact_response(
         seed=seed,
-        event_id=event.id,
+        # Keyed on source_ref, NOT the stored event id. The stored id is now
+        # namespaced per batch run, so hashing on it would make the same
+        # synthetic record behave differently in every run and break Section
+        # 11's reproducibility guarantee. source_ref is generated deterministically
+        # from the seed and is what the gateway simulator already keys on, so
+        # both halves of the world model stay consistent with each other.
+        event_id=event.source_ref or event.id,
         attempt_number=attempt_number,
         action_code=action.value,
         probability=decision.recovery_probability,
@@ -849,7 +855,21 @@ def process_record(
     with correlation_scope(correlation_id):
         try:
             validate_record(payload)
-            event_id = payload["id"]
+            # Stored identity is namespaced to THIS run. The generator is
+            # deterministic by design (Section 11, seed 42), so every run
+            # regenerates the same ids — which meant a second batch found all
+            # 50 records already present, processed nothing, and reported a
+            # completely accurate but useless at_risk of 0.00. The demo looked
+            # broken precisely when someone ran it twice.
+            #
+            # Prefixing with batch_id keeps the generated DATA identical
+            # (amounts, types, causes, injected edge cases all still follow
+            # seed 42) while making each run a genuinely new set of events.
+            # Section 11's intra-batch replays still collide, because a replay
+            # carries the same generated id AND the same batch prefix — so
+            # duplicate detection, idempotency, locks and fault isolation are
+            # all unchanged.
+            event_id = f"{run.batch_id}_{payload['id']}"
             result.event_id = event_id
 
             # Section 11 replays ~10% of records; the second sighting is a

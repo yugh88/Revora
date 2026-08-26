@@ -1,0 +1,122 @@
+# Reasoning templates. BUILD_SPEC Section 7.
+#
+# "Reasoning + Hinglish scripts are generated from structured decision_factors
+#  via a template engine (Jinja/YAML), NOT an LLM."
+#
+# Every sentence Revora shows a human lives here, in configuration. No sentence
+# is assembled inside business logic, which is what makes the wording auditable
+# and changeable without a code review of the decision engine.
+#
+# Slots are filled from Decision.decision_factors and the event itself. A
+# template referencing a slot that is not available fails loudly rather than
+# rendering "None" at a customer.
+#
+# Lookup order, most specific first:
+#   by_root_cause[<cause>] -> by_event_type[<type>] -> default
+
+version: 1
+
+default: >-
+  Diagnosed {root_cause} on a {currency} {amount} {event_type_label} for
+  {customer_name}. Selected {action_label} at attempt {attempt_number}: expected
+  recovery {probability_pct} of the amount at risk. {policy_sentence}
+
+# --- per event type --------------------------------------------------------- #
+by_event_type:
+  payment_degraded: >-
+    A {currency} {amount} payment failed at the gateway for {customer_name}.
+    Diagnosed {root_cause} from the gateway's own error code. Chose
+    {action_label} at attempt {attempt_number}, scored at {probability_pct}
+    likelihood of recovery. {policy_sentence}
+
+  checkout_abandoned: >-
+    {customer_name} left a {currency} {amount} checkout before paying.
+    Diagnosed {root_cause}. Chose {action_label} at attempt {attempt_number}
+    ({probability_pct} expected recovery) — intent decays quickly, so the
+    cheapest in-session nudge is scored highest. {policy_sentence}
+
+  subscription_failed: >-
+    A {currency} {amount} recurring charge failed for {customer_name}.
+    Diagnosed {root_cause}. The gateway runs its own retry, so Revora waits and
+    observes rather than forcing another charge. {policy_sentence}
+
+  invoice_overdue: >-
+    Invoice for {currency} {amount} to {customer_name} is {days_overdue} days
+    overdue. Diagnosed {root_cause}. Chose {action_label} at attempt
+    {attempt_number}, scored at {probability_pct}. {policy_sentence}
+
+  mandate_failed: >-
+    A {currency} {amount} mandate did not execute for {customer_name}.
+    Diagnosed {root_cause}. Chose {action_label} at attempt {attempt_number}
+    ({probability_pct} expected recovery). {policy_sentence}
+
+# --- per root cause, where the cause changes the explanation ---------------- #
+by_root_cause:
+  card_expired: >-
+    {customer_name}'s card has expired, so the {currency} {amount} charge could
+    not go through. Nothing recovers this except the customer replacing the
+    card, so Revora chose {action_label} — the action that carries an update
+    link — at attempt {attempt_number}. {policy_sentence}
+
+  insufficient_funds: >-
+    The account had insufficient funds for {currency} {amount}. Messaging does
+    not create money, so this is scored low ({probability_pct}) and timing
+    matters more than persuasion. Chose {action_label} at attempt
+    {attempt_number}. {policy_sentence}
+
+  issuer_declined: >-
+    The issuing bank declined the {currency} {amount} charge outright. Section 6
+    treats this as a hard stop: no retry is permitted and none was attempted.
+    {policy_sentence}
+
+  bank_rejected: >-
+    The bank rejected the mandate for {currency} {amount}. This is a hard stop —
+    retrying a bank rejection is not permitted. {policy_sentence}
+
+  network_timeout: >-
+    The {currency} {amount} charge timed out in transit rather than being
+    refused. Transient infrastructure failures usually clear, so a plain retry
+    scores highest at {probability_pct}. {policy_sentence}
+
+  forgotten: >-
+    A {currency} {amount} invoice to {customer_name} is {days_overdue} days
+    past due with no dispute or approval marker. The most common explanation is
+    simply that it was missed, so Revora chose {action_label} — the cheapest
+    action that works — at {probability_pct} expected recovery. {policy_sentence}
+
+  cash_flow_delay: >-
+    The {currency} {amount} invoice is {days_overdue} days overdue and shows no
+    dispute. This is consistent with a cash-flow delay, where pressure does not
+    help. Chose {action_label} at {probability_pct}. {policy_sentence}
+
+  disputed_amount: >-
+    The {currency} {amount} invoice is disputed. Chasing payment on a disputed
+    amount is counterproductive, so this is scored low and routed to
+    {action_label}. {policy_sentence}
+
+  not_authenticated: >-
+    The mandate for {currency} {amount} was never authenticated by
+    {customer_name}. Re-authentication is a customer action and converts well
+    when asked directly — {probability_pct} at attempt {attempt_number}.
+    {policy_sentence}
+
+  broken_ptp: >-
+    {customer_name} promised to pay {currency} {amount} and the promise lapsed.
+    A softer approach has already been tried and failed, so Revora escalated one
+    level to {action_label}. {policy_sentence}
+
+  unknown: >-
+    The {currency} {amount} {event_type_label} for {customer_name} carries no
+    signal that distinguishes its cause. Revora recorded low confidence rather
+    than guessing, and this event is flagged for human review. {policy_sentence}
+
+# --- policy sentence, appended to every reasoning --------------------------- #
+# Kept separate so the policy outcome is stated in identical language whichever
+# template ran — a reader can always find it in the same place.
+policy_sentences:
+  allowed: The policy gate allowed this action.
+  blocked: >-
+    The policy gate blocked every permitted action: {rule_triggered}
+    ({threshold_checked} was {actual_value}, limit {threshold_value}). No action
+    was taken.
+  no_action: No action was permitted for this event.

@@ -1,0 +1,117 @@
+# Hinglish recovery scripts. BUILD_SPEC Sections 1 and 7.
+#
+# "Hinglish recovery scripts (India-specific): tone/urgency selected by
+#  root cause + escalation level + customer history; compliance-checked."
+#
+# Hinglish as it is actually spoken in Indian customer service: an English
+# sentence frame with Hindi carrying the politeness and the softeners. Not
+# translated English, and not Devanagari — this is the register a support agent
+# would genuinely use on a call or a WhatsApp message.
+#
+# Three tones, selected from real state, never chosen for effect:
+#   friendly  escalation L0 and a customer with good history
+#   neutral   the default
+#   formal    escalation L2, or a hard commercial situation
+#
+# Urgency is bound to escalation level by compliance_rules.yaml rule 4, so a
+# first reminder can never be phrased as a final notice.
+#
+# Every line here is deliberately free of the coercive vocabulary in
+# compliance_rules.yaml. The blocklist still runs on the rendered output — this
+# file being careful is not a reason to skip the check.
+
+version: 1
+
+# Opening line by tone.
+greetings:
+  friendly: "Namaste {customer_name} ji, {merchant_name} se baat kar rahe hain."
+  neutral: "Hello {customer_name}, {merchant_name} se ek update hai aapke liye."
+  formal: "Namaste {customer_name}, yeh {merchant_name} ki taraf se ek formal reminder hai."
+
+# Closing line by tone.
+closings:
+  friendly: "Koi dikkat ho toh bataiye, hum help kar denge. Dhanyavaad!"
+  neutral: "Kisi bhi sawaal ke liye humein bataiye. Dhanyavaad."
+  formal: "Kripya is par dhyaan dijiye. Kisi spashtikaran ke liye hum uplabdh hain."
+
+default:
+  friendly: "Aapka {currency} {amount} ka payment abhi tak complete nahi hua hai. Jab convenient ho, ek baar dekh lijiyega."
+  neutral: "Aapka {currency} {amount} ka payment pending hai. Aap ise kabhi bhi complete kar sakte hain."
+  formal: "Aapke {currency} {amount} ke bakaya payment ke sambandh mein yeh suchna hai."
+
+# --- body, keyed by root cause then tone ------------------------------------ #
+by_root_cause:
+  card_expired:
+    friendly: "Aapka card expire ho gaya hai, isliye {currency} {amount} ka payment nahi ho paaya. Ek naya card add kar dijiye, bas do minute ka kaam hai."
+    neutral: "Aapke card ki validity khatam ho chuki hai, jiski wajah se {currency} {amount} ka payment fail hua. Kripya card update kar dijiye."
+    formal: "Aapke registered card ki samay-seema samapt ho chuki hai. {currency} {amount} ka bhugtan ke liye kripya naya card panjikrit karein."
+
+  insufficient_funds:
+    friendly: "{currency} {amount} ka payment try kiya tha, lekin balance kam tha. Jab balance aa jaaye, hum dobara try kar lenge."
+    neutral: "Account mein paryapt balance na hone ke kaaran {currency} {amount} ka payment nahi hua. Balance available hone par hum retry karenge."
+    formal: "Apryapt shesh raashi ke kaaran {currency} {amount} ka bhugtan asafal raha. Kripya raashi uplabdh karayein."
+
+  not_authenticated:
+    friendly: "Aapka auto-pay mandate abhi authenticate nahi hua hai. Ek baar approve kar dijiye, phir har mahine apne aap ho jayega."
+    neutral: "Aapka mandate authentication pending hai, isliye {currency} {amount} ka auto-debit nahi hua. Kripya ise approve karein."
+    formal: "Mandate ka pramaanikaran lambit hai, jiske kaaran {currency} {amount} ka aadesh kriyanvit nahi ho saka."
+
+  insufficient_balance:
+    friendly: "Auto-debit ke time balance kam tha, isliye {currency} {amount} nahi kat paaya. Hum salary date ke aas paas dobara try karenge."
+    neutral: "{currency} {amount} ka auto-debit balance kam hone se fail hua. Agla attempt salary cycle ke baad hoga."
+    formal: "Apryapt shesh raashi ke kaaran {currency} {amount} ka auto-debit asafal raha."
+
+  forgotten:
+    friendly: "Aapka {currency} {amount} ka invoice {days_overdue} din se pending hai. Shayad nazar se chook gaya ho — ek baar dekh lijiyega."
+    neutral: "Invoice {currency} {amount}, {days_overdue} din se bakaya hai. Kripya suvidhanusar bhugtan kar dijiye."
+    formal: "{currency} {amount} ka invoice {days_overdue} dinon se bakaya hai. Kripya bhugtan ki vyavastha karein."
+
+  cash_flow_delay:
+    friendly: "{currency} {amount} ka payment {days_overdue} din se pending hai. Agar timing ki dikkat hai toh bataiye, hum kuch nikaal lenge."
+    neutral: "{currency} {amount} ka bakaya {days_overdue} din purana hai. Agar aapko payment schedule discuss karna ho toh humein bataiye."
+    formal: "{currency} {amount} ka bhugtan {days_overdue} dinon se lambit hai. Kripya bhugtan ki samay-seema suchit karein."
+
+  awaiting_approval:
+    friendly: "{currency} {amount} ka invoice shayad approval mein atka hai. Agar kisi aur ko forward karna ho toh bataiye."
+    neutral: "{currency} {amount} ka invoice {days_overdue} din se approval ke intezaar mein lagta hai. Kripya sthiti batayein."
+    formal: "{currency} {amount} ka invoice anumodan hetu lambit prateet hota hai. Kripya vartamaan sthiti suchit karein."
+
+  disputed_amount:
+    friendly: "Lagta hai {currency} {amount} ke invoice par koi sawaal hai. Bataiye kya issue hai, hum sort kar dete hain."
+    neutral: "{currency} {amount} ke invoice par ek dispute darj hai. Kripya vivaran dijiye taaki hum ise suljha sakein."
+    formal: "{currency} {amount} ke invoice par vivaad darj hai. Kripya aavashyak vivaran uplabdh karayein."
+
+  payment_step_dropped:
+    friendly: "Aapka {currency} {amount} ka order cart mein hi reh gaya. Chahein toh abhi complete kar lijiye."
+    neutral: "Aapka {currency} {amount} ka checkout adhura reh gaya tha. Aap ise jaari rakh sakte hain."
+    formal: "Aapki {currency} {amount} ki kraya prakriya apoorn rahi."
+
+  otp_timeout:
+    friendly: "OTP time out ho gaya tha, isliye {currency} {amount} ka payment complete nahi hua. Ek baar phir try kar lijiye."
+    neutral: "OTP samay par verify na hone se {currency} {amount} ka payment adhura reh gaya. Kripya dobara prayas karein."
+    formal: "OTP satyapan samay-seema samapt hone ke kaaran {currency} {amount} ka bhugtan apoorn raha."
+
+  broken_ptp:
+    friendly: "Aapne {currency} {amount} ka payment karne ko kaha tha, woh abhi tak nahi aaya. Koi dikkat ho toh bataiye."
+    neutral: "{currency} {amount} ke liye di gayi tareekh nikal chuki hai aur payment abhi bhi bakaya hai. Kripya naya samay batayein."
+    formal: "{currency} {amount} hetu suchit bhugtan tithi vyateet ho chuki hai aur raashi abhi bhi bakaya hai."
+
+  unknown:
+    friendly: "Aapka {currency} {amount} ka payment complete nahi ho paaya. Hum dekh rahe hain kya hua — aap chahein toh dobara try kar sakte hain."
+    neutral: "{currency} {amount} ka payment poora nahi hua. Kaaran spasht nahi hai; hamari team ise dekh rahi hai."
+    formal: "{currency} {amount} ka bhugtan apoorn raha. Kaaran ki jaanch ki ja rahi hai."
+
+# --- urgency suffix, appended only when the escalation level permits -------- #
+# Rule 4 in compliance_rules.yaml governs which of these may be used.
+urgency_lines:
+  low: ""
+  medium: "Agar is hafte ho jaaye toh accha rahega."
+  high: "Kripya jald se jald ise dekh lijiye."
+
+# --- channel-specific framing ----------------------------------------------- #
+channel_notes:
+  voice_script: Read aloud; pause after the greeting and wait for acknowledgement.
+  sms: Keep under 320 characters when sending as SMS.
+  whatsapp: Suitable for WhatsApp Business messaging.
+  email: Use as the email body; add the merchant's standard signature.
+  in_app: Show as an in-app message.

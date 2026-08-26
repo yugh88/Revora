@@ -28,7 +28,10 @@ from app.config import get_settings
 from app.database import init_db
 from app.routers import audit as audit_router
 from app.routers import batch as batch_router
+from app.routers import events as events_router
 from app.routers import exceptions as exceptions_router
+from app.routers import policies as policies_router
+from app.routers import scripts as scripts_router
 from app.services.logging_config import (
     configure_logging,
     correlation_scope,
@@ -108,6 +111,9 @@ def health() -> JSONResponse:
     return JSONResponse({"status": "ok", "version": app.version})
 
 
+app.include_router(events_router.router)
 app.include_router(batch_router.router)
 app.include_router(exceptions_router.router)
 app.include_router(audit_router.router)
+app.include_router(policies_router.router)
+app.include_router(scripts_router.router)
