@@ -12,10 +12,13 @@ import {
   MessageSquare,
   PhoneCall,
   RotateCcw,
+  Play,
   Send,
+  Square,
   Eye,
   ShieldX,
   Smartphone,
+  X,
 } from 'lucide-react';
 
 import { Badge } from '../../components/ui/badge';
@@ -28,6 +31,7 @@ import {
   ApiError,
   formatDateTime,
   formatInr,
+  formatRelative,
 } from '../../lib/api-client';
 import {
   communicationNextStep,
@@ -75,6 +79,25 @@ const CHANNEL_ICON: Record<string, typeof Mail> = {
   in_app: MessageSquare,
 };
 
+/** Time windows for the contact history, in days. */
+const HISTORY_WINDOWS = [
+  { value: '1', label: 'Last day' },
+  { value: '7', label: 'Last week' },
+  { value: '30', label: 'Last month' },
+  { value: '90', label: 'Last 3 months' },
+  { value: '180', label: 'Last 6 months' },
+  { value: '365', label: 'Last 12 months' },
+  { value: '', label: 'All time' },
+] as const;
+
+/** Turn a window into the instant the API filters on. */
+function sinceIso(days: string): string | undefined {
+  if (!days) return undefined;
+  const from = new Date();
+  from.setDate(from.getDate() - Number.parseInt(days, 10));
+  return from.toISOString();
+}
+
 const STATUS_TONE: Record<string, React.ComponentProps<typeof Badge>['variant']> = {
   prepared: 'neutral',
   simulated: 'accent',
@@ -91,6 +114,7 @@ export default function CommunicationsPage() {
 
 function Communications() {
   const [data, setData] = React.useState<CommunicationListResponse | null>(null);
+  const [since, setSince] = React.useState<string>('30');
   const [selected, setSelected] = React.useState<CommunicationOut | null>(null);
   // The sidebar deep-links with ?channel=, and the API applies that filter
   // server-side — which is what makes those sub-items real navigation.
@@ -101,6 +125,13 @@ function Communications() {
   React.useEffect(() => {
     setChannel(urlChannel);
   }, [urlChannel]);
+
+  // A selection that is no longer in view must not linger. Switching from
+  // Email to SMS with an email open would otherwise leave that email's detail
+  // beside a list it does not belong to.
+  React.useEffect(() => {
+    setSelected(null);
+  }, [channel, since]);
   const [loading, setLoading] = React.useState(true);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<ApiError | null>(null);
@@ -109,7 +140,10 @@ function Communications() {
   const load = React.useCallback(async () => {
     setLoading(true);
     try {
-      const body = await api.listCommunications(channel || undefined);
+      const body = await api.listCommunications(
+        channel || undefined,
+        sinceIso(since),
+      );
       setData(body);
       setSelected((current) =>
         current ? (body.items.find((c) => c.id === current.id) ?? null) : null,
@@ -124,7 +158,7 @@ function Communications() {
     } finally {
       setLoading(false);
     }
-  }, [channel]);
+  }, [channel, since]);
 
   React.useEffect(() => {
     void load();
@@ -205,6 +239,31 @@ function Communications() {
           })}
         </div>
 
+        <div className="animate-fade-up stagger-1 mt-3 flex flex-wrap items-center gap-2">
+          <span className="text-micro uppercase text-ink-subtle">
+            Communication history
+          </span>
+          <label>
+            <span className="sr-only">Time period</span>
+            <select
+              value={since}
+              onChange={(event) => setSince(event.target.value)}
+              className="h-8 cursor-pointer rounded-lg border border-line bg-surface px-2.5 text-xs text-ink outline-none hover:border-line-strong focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/30"
+            >
+              {HISTORY_WINDOWS.map((option) => (
+                <option key={option.value || 'all'} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          {data ? (
+            <span className="tabular text-micro text-ink-subtle">
+              {data.total} {data.total === 1 ? 'contact' : 'contacts'}
+            </span>
+          ) : null}
+        </div>
+
         <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-3">
           <div className="lg:col-span-2">
             {error ? (
@@ -243,12 +302,18 @@ function Communications() {
                             <Badge variant={STATUS_TONE[item.status] ?? 'neutral'}>
                               {communicationStatusLabel(item.status)}
                             </Badge>
-                            <span className="tabular ml-auto text-xs text-ink-subtle">
-                              {formatDateTime(item.created_at)}
+                            <span
+                              className="tabular ml-auto text-xs text-ink-subtle"
+                              title={formatDateTime(item.created_at)}
+                            >
+                              {formatRelative(item.created_at)}
                             </span>
                           </div>
                           <p className="mt-1 text-xs text-ink-subtle">
-                            {contactLabel(item.channel)} · {rootCauseLabel(item.reason)}
+                            {contactLabel(item.channel)} · {rootCauseLabel(item.reason)} ·{' '}
+                            {item.status === 'blocked'
+                              ? 'Policy blocked this'
+                              : 'Policy allowed this'}
                           </p>
                           {item.customer_response ? (
                             <p className="mt-1 text-micro text-accent">
@@ -267,6 +332,13 @@ function Communications() {
           <div className="lg:col-span-1">
             {selected ? (
               <ContactDetail
+                // The fix for stale detail state. Without a key React reuses
+                // this component instance across selections, so customer A's
+                // fetched preview and chosen date survive into customer B's
+                // panel. Keying on the record id forces a fresh instance, which
+                // is the difference between "the same component showing new
+                // props" and "a new component".
+                key={selected.id}
                 contact={selected}
                 busy={busy}
                 onSend={() =>
@@ -278,6 +350,7 @@ function Communications() {
                 onRespond={(body, message) =>
                   void act(() => api.simulateResponse(selected.id, body), message)
                 }
+                onClose={() => setSelected(null)}
               />
             ) : (
               <PrepareContact
@@ -304,10 +377,12 @@ function ContactDetail({
   busy,
   onSend,
   onRespond,
+  onClose,
 }: {
   contact: CommunicationOut;
   busy: boolean;
   onSend: () => void;
+  onClose: () => void;
   onRespond: (
     body: { response: string; promised_amount?: string; promised_date?: string },
     message: string,
@@ -320,10 +395,17 @@ function ContactDetail({
   return (
     <Card className="sticky top-24">
       <CardHeader>
-        <CardTitle>{contactLabel(contact.channel)}</CardTitle>
-        <CardDescription>
-          {contact.customer_name} · {rootCauseLabel(contact.reason)}
-        </CardDescription>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <CardTitle>{contactLabel(contact.channel)}</CardTitle>
+            <CardDescription>
+              {contact.customer_name} · {rootCauseLabel(contact.reason)}
+            </CardDescription>
+          </div>
+          <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close">
+            <X className="h-3.5 w-3.5" aria-hidden="true" />
+          </Button>
+        </div>
       </CardHeader>
 
       <div className="px-5 pb-5">
@@ -336,6 +418,17 @@ function ContactDetail({
         <p className="mt-2 text-xs leading-relaxed text-ink-muted">
           {communicationStatusMeaning(contact.status)}
         </p>
+
+        {contact.channel === 'voice_script' && contact.body ? (
+          <VoiceDemo script={contact.body} />
+        ) : null}
+
+        {contact.channel_reason ? (
+          <p className="mt-2 rounded-lg bg-surface-raised/60 px-3 py-2 text-xs leading-relaxed text-ink-muted">
+            <span className="font-medium text-ink">Why this channel: </span>
+            {contact.channel_reason}
+          </p>
+        ) : null}
 
         {contact.status === 'blocked' ? (
           <>
@@ -529,6 +622,86 @@ function BlockedPreview({ eventId }: { eventId: string }) {
         Nothing was sent and nothing was changed. This is what the message would say
         during your permitted contact hours.
       </p>
+    </div>
+  );
+}
+
+/**
+ * Hear the recovery call, as a demonstration.
+ *
+ * Uses the browser's own speech synthesis. That is a deliberate choice: it
+ * needs no provider, no API key, no paid TTS service and no network call, so
+ * the demo works on a laptop with the wifi off and cannot accidentally become a
+ * dependency on somebody's billing account.
+ *
+ * No telephone call happens. Nothing is dialled, nothing is recorded, and the
+ * label says so — a judge hearing audio must not be able to conclude a customer
+ * was rung.
+ */
+function VoiceDemo({ script }: { script: string }) {
+  const [speaking, setSpeaking] = React.useState(false);
+  const [available, setAvailable] = React.useState(false);
+
+  React.useEffect(() => {
+    setAvailable(typeof window !== 'undefined' && 'speechSynthesis' in window);
+    return () => {
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
+
+  const speak = () => {
+    if (!available) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(script);
+    // Hinglish read by an Indian English voice where the browser has one.
+    utterance.lang = 'en-IN';
+    utterance.rate = 0.95;
+    utterance.onend = () => setSpeaking(false);
+    utterance.onerror = () => setSpeaking(false);
+    setSpeaking(true);
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const stop = () => {
+    window.speechSynthesis.cancel();
+    setSpeaking(false);
+  };
+
+  return (
+    <div className="mt-3 rounded-lg border border-line bg-surface-raised/50 p-3">
+      <p className="text-micro font-semibold uppercase text-ink-subtle">
+        Voice demo — no call is made
+      </p>
+      <p className="mt-1.5 text-xs leading-relaxed text-ink-muted">
+        Hear how this recovery call would sound. Your browser reads the script
+        aloud; nothing is dialled and no customer is contacted.
+      </p>
+      {available ? (
+        <Button
+          variant="secondary"
+          size="sm"
+          className="mt-2.5 w-full"
+          onClick={speaking ? stop : speak}
+        >
+          {speaking ? (
+            <>
+              <Square className="h-3.5 w-3.5" aria-hidden="true" />
+              Stop
+            </>
+          ) : (
+            <>
+              <Play className="h-3.5 w-3.5" aria-hidden="true" />
+              Play voice demo
+            </>
+          )}
+        </Button>
+      ) : (
+        <p className="mt-2 text-xs text-ink-subtle">
+          This browser cannot read text aloud. The script above is what would be said.
+        </p>
+      )}
     </div>
   );
 }

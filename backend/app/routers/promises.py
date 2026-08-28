@@ -14,6 +14,7 @@ arrived. There is no path from this router to a real charge.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status as http_status
@@ -65,15 +66,23 @@ def _to_out(session: Session, promise: PromiseToPay) -> PromiseOut:
 @router.get("/promises", response_model=PromiseListResponse, summary="Promises to pay")
 def list_promises(
     status: str | None = Query(default=None, description="Filter by displayed status."),
-    limit: int = Query(default=100, ge=1, le=500),
+    since: datetime | None = Query(
+        default=None, description="Only promises made at or after this instant."
+    ),
+    limit: int = Query(default=200, ge=1, le=500),
     session: Session = Depends(get_db),
 ) -> PromiseListResponse:
-    """Every promise, newest first. Read-only — no status is written here."""
-    rows = list(
-        session.execute(
-            select(PromiseToPay).order_by(PromiseToPay.created_at.desc()).limit(limit)
-        ).scalars()
-    )
+    """Every promise, newest first. Read-only — no status is written here.
+
+    ``since`` is what lets the Promises page and the Overview summary agree:
+    both ask the same endpoint for the same window, so neither can quietly show
+    a different total.
+    """
+    stmt = select(PromiseToPay).order_by(PromiseToPay.created_at.desc())
+    if since is not None:
+        moment = since if since.tzinfo else since.replace(tzinfo=timezone.utc)
+        stmt = stmt.where(PromiseToPay.created_at >= moment)
+    rows = list(session.execute(stmt.limit(limit)).scalars())
     items = [_to_out(session, row) for row in rows]
 
     if status:
@@ -220,4 +229,4 @@ def evaluate_promises(session: Session = Depends(get_db)) -> PromiseListResponse
     on who opened which page.
     """
     promise_tracker.evaluate_overdue(session)
-    return list_promises(status=None, limit=500, session=session)
+    return list_promises(status=None, since=None, limit=500, session=session)

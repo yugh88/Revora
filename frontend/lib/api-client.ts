@@ -21,6 +21,7 @@ import type {
   HealthResponse,
   CommunicationListResponse,
   CommunicationOut,
+  NotificationListResponse,
   PromiseCreate,
   PromiseListResponse,
   PromiseOut,
@@ -237,10 +238,14 @@ export const api = {
   },
 
   /** GET /communications — recovery contacts. Read-only. */
-  listCommunications(channel?: string): Promise<CommunicationListResponse> {
-    return request<CommunicationListResponse>(`/communications${buildQuery({ channel })}`, {
-      method: 'GET',
-    });
+  listCommunications(
+    channel?: string,
+    since?: string,
+  ): Promise<CommunicationListResponse> {
+    return request<CommunicationListResponse>(
+      `/communications${buildQuery({ channel, since })}`,
+      { method: 'GET' },
+    );
   },
 
   /**
@@ -277,10 +282,15 @@ export const api = {
   },
 
   /** GET /promises — every promise, with derived merchant status. Read-only. */
-  listPromises(status?: string): Promise<PromiseListResponse> {
-    return request<PromiseListResponse>(`/promises${buildQuery({ status })}`, {
+  listPromises(status?: string, since?: string): Promise<PromiseListResponse> {
+    return request<PromiseListResponse>(`/promises${buildQuery({ status, since })}`, {
       method: 'GET',
     });
+  },
+
+  /** GET /notifications — derived merchant alerts. Read-only. */
+  listNotifications(): Promise<NotificationListResponse> {
+    return request<NotificationListResponse>('/notifications', { method: 'GET' });
   },
 
   /** GET /promises/{id} */

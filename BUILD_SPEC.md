@@ -238,6 +238,7 @@ open → diagnosing → intervening → { recovered | escalated | unrecoverable 
 - `GET /exceptions` — unresolved/low-confidence cases + why the engine chose not to act
 - `GET /policies`, `PUT /policies` — merchant-configurable thresholds
 - `GET /audit` — searchable immutable log
+- `GET /notifications` — READ-ONLY merchant alerts DERIVED from existing state (recoveries, promises, escalations, policy blocks). No notification table: a stored copy would drift from the ledger it describes.
 - `GET /communications`, `POST /communications/prepare`, `POST /communications/{id}/simulate-send`, `POST /communications/{id}/simulate-response` — Email/SMS/Voice recovery contacts. Message bodies come from the existing compliance-checked template engine; a refused message is recorded as blocked and carries no text. NOTHING is ever sent: there is no provider integration, every record is explicitly marked simulated, and a simulated customer response is what creates a Promise to Pay.
 - `GET /promises`, `GET /promises/{id}`, `POST /promises`, `POST /promises/{id}/fulfil`, `POST /promises/{id}/cancel`, `POST /promises/evaluate` — Promise-to-Pay lifecycle. Fulfilment records recovery through the same `upsert_outcome` the batch uses; the ledger stays the single source of financial truth.
 - `GET /scripts/{event_id}` — Hinglish script + reasoning + tone + urgency + compliance validation
@@ -319,6 +320,7 @@ revora/
 │   │   │   ├── exceptions.py
 │   │   │   ├── policies.py
 │   │   │   ├── audit.py
+│   │   │   ├── notifications.py                 # derived merchant alerts, read-only
 │   │   │   ├── communications.py                # prepare / simulate send / simulate response
 │   │   │   ├── promises.py                      # Promise-to-Pay: create, list, fulfil, cancel
 │   │   │   ├── scripts.py
@@ -353,6 +355,7 @@ revora/
 │       ├── test_recovery_runs.py
 │       ├── test_promises.py
 │       ├── test_communications.py
+│       ├── test_notifications.py
 │       ├── test_template_engine.py
 │       ├── test_policies.py
 │       ├── test_scripts.py
@@ -379,6 +382,8 @@ revora/
     │   ├── exceptions/page.tsx
     │   ├── audit/page.tsx
     │   ├── scripts/page.tsx
+    │   ├── settings/page.tsx                  # merchant profile + preferences
+    │   ├── help/page.tsx                      # support form + merchant documentation
     │   ├── communications/page.tsx           # Email / SMS / Voice recovery contacts
     │   ├── promises/page.tsx                 # merchant list, detail, customer promise simulation
     │   └── policies/page.tsx

@@ -530,6 +530,8 @@ export interface CommunicationOut {
   /** Empty when compliance refused. Never partially rendered. */
   body: string;
   reason: string;
+  /** Why the agent chose this channel, in merchant language. */
+  channel_reason: string;
   blocked_reason: string | null;
   /** Always true. No provider integration exists. */
   is_simulated: boolean;
@@ -548,4 +550,23 @@ export interface CommunicationListResponse {
   channel_breakdown: Record<string, number>;
   status_breakdown: Record<string, number>;
   items: CommunicationOut[];
+}
+
+/* --------------------------------------------------------------------------
+ * Notifications — derived from real state, never stored
+ * -------------------------------------------------------------------------- */
+
+export interface MerchantNotification {
+  id: string;
+  kind: string;
+  title: string;
+  detail: string;
+  severity: 'info' | 'attention' | 'good';
+  occurred_at: string;
+  href: string;
+}
+
+export interface NotificationListResponse {
+  total: number;
+  items: MerchantNotification[];
 }

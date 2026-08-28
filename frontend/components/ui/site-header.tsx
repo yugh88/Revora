@@ -9,10 +9,7 @@ import {
   FileClock,
   FileText,
   HandCoins,
-  Mail,
   MessageSquare,
-  PhoneCall,
-  Smartphone,
   Landmark,
   LayoutDashboard,
   Menu,
@@ -20,12 +17,17 @@ import {
   PlayCircle,
   RefreshCw,
   ShoppingCart,
+  Bell,
+  LifeBuoy,
+  Settings,
   SlidersHorizontal,
   TrendingUp,
   X,
   type LucideIcon,
 } from 'lucide-react';
 
+import { api } from '../../lib/api-client';
+import type { MerchantNotification } from '../../lib/types';
 import { ThemeToggle } from './theme-toggle';
 import { cn } from './utils';
 
@@ -81,20 +83,16 @@ const PRIMARY: NavGroup[] = [
   },
   { label: 'Promises to Pay', icon: HandCoins, href: '/promises' },
   { label: 'Run Recovery', icon: PlayCircle, href: '/batch' },
-  {
-    label: 'Communications',
-    icon: MessageSquare,
-    href: '/communications',
-    children: [
-      { href: '/communications', label: 'All contacts' },
-      { href: '/communications?channel=email', label: 'Email', icon: Mail },
-      { href: '/communications?channel=sms', label: 'SMS', icon: Smartphone },
-      { href: '/communications?channel=voice_script', label: 'Voice', icon: PhoneCall },
-    ],
-  },
+  { label: 'Communications', icon: MessageSquare, href: '/communications' },
   { label: 'Recovery Messages', icon: MessageSquareText, href: '/scripts' },
   { label: 'Activity Log', icon: FileClock, href: '/audit' },
   { label: 'Policies', icon: SlidersHorizontal, href: '/policies' },
+];
+
+/** Secondary group, below a divider. Product configuration and help. */
+const SECONDARY: NavGroup[] = [
+  { label: 'Settings', icon: Settings, href: '/settings' },
+  { label: 'Help & Documentation', icon: LifeBuoy, href: '/help' },
 ];
 
 function RevoraMark({ className }: { className?: string }) {
@@ -114,22 +112,26 @@ function RevoraMark({ className }: { className?: string }) {
   );
 }
 
-function NavItems({ onNavigate }: { onNavigate?: () => void }) {
+function NavItems({
+  groups = PRIMARY,
+  onNavigate,
+}: {
+  groups?: NavGroup[];
+  onNavigate?: () => void;
+}) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const activeType = searchParams.get('type');
-  const activeChannel = searchParams.get('channel');
 
   // Open the group that contains the current page, so a deep link lands with
   // its section already expanded rather than collapsed and disorienting.
   const [open, setOpen] = React.useState<Record<string, boolean>>(() => ({
     'Revenue Recovery': pathname.startsWith('/events'),
-    Communications: pathname.startsWith('/communications'),
   }));
 
   return (
     <nav aria-label="Primary" className="flex flex-col gap-0.5">
-      {PRIMARY.map((group) => {
+      {groups.map((group) => {
         const Icon = group.icon;
         const isEvents = group.href === '/events';
         const groupActive =
@@ -187,9 +189,7 @@ function NavItems({ onNavigate }: { onNavigate?: () => void }) {
                   const active =
                     isEvents && pathname === '/events'
                       ? (child.eventType ?? null) === activeType
-                      : pathname === '/communications'
-                        ? child.href === `/communications${activeChannel ? `?channel=${activeChannel}` : ''}`
-                        : false;
+                      : false;
                   return (
                     <li key={child.label}>
                       <Link
@@ -223,12 +223,146 @@ function currentSection(pathname: string): string {
   if (pathname === '/') return 'Overview';
   if (pathname.startsWith('/events')) return 'Revenue Recovery';
   if (pathname.startsWith('/communications')) return 'Communications';
+  if (pathname.startsWith('/settings')) return 'Settings';
+  if (pathname.startsWith('/help')) return 'Help & Documentation';
   if (pathname.startsWith('/promises')) return 'Promises to Pay';
   if (pathname.startsWith('/batch')) return 'Run Recovery';
   if (pathname.startsWith('/scripts')) return 'Recovery Messages';
   if (pathname.startsWith('/audit')) return 'Activity Log';
   if (pathname.startsWith('/policies')) return 'Policies';
   return 'Revora';
+}
+
+/**
+ * Notification centre.
+ *
+ * Alerts are derived server-side from real state, so the panel cannot show
+ * something the ledger disagrees with. "Unread" is the one thing with no
+ * server-side home — there is no notifications table to mark — so the client
+ * remembers which alerts it has already shown. A slightly wrong badge is a
+ * small cost; a stored alert that outlived its cause would be a much larger
+ * one.
+ */
+function NotificationBell() {
+  const [items, setItems] = React.useState<MerchantNotification[]>([]);
+  const [open, setOpen] = React.useState(false);
+  const [seen, setSeen] = React.useState<Set<string>>(new Set());
+
+  React.useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem('revora.seenNotifications');
+      if (stored) setSeen(new Set(JSON.parse(stored) as string[]));
+    } catch {
+      // A corrupt or unavailable store just means everything reads as unread.
+    }
+  }, []);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    api
+      .listNotifications()
+      .then((body) => {
+        if (!cancelled) setItems(body.items);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const unread = items.filter((item) => !seen.has(item.id)).length;
+
+  const markSeen = () => {
+    const ids = new Set(items.map((item) => item.id));
+    setSeen(ids);
+    try {
+      window.localStorage.setItem(
+        'revora.seenNotifications',
+        JSON.stringify(Array.from(ids)),
+      );
+    } catch {
+      // Not being able to remember is not a reason to fail.
+    }
+  };
+
+  const TONE: Record<string, string> = {
+    good: 'bg-recovered',
+    attention: 'bg-pending',
+    info: 'bg-ink-subtle',
+  };
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => {
+          setOpen((current) => !current);
+          if (!open) markSeen();
+        }}
+        aria-label={
+          unread > 0 ? `Notifications, ${unread} unread` : 'Notifications'
+        }
+        aria-expanded={open}
+        className="relative flex h-9 w-9 items-center justify-center rounded-lg border border-line text-ink-muted outline-none transition-colors hover:border-line-strong hover:text-ink focus-visible:ring-2 focus-visible:ring-accent"
+      >
+        <Bell className="h-4 w-4" aria-hidden="true" />
+        {unread > 0 ? (
+          <span className="tabular absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold text-accent-ink">
+            {unread > 9 ? '9+' : unread}
+          </span>
+        ) : null}
+      </button>
+
+      {open ? (
+        <>
+          <button
+            type="button"
+            aria-label="Close notifications"
+            onClick={() => setOpen(false)}
+            className="fixed inset-0 z-40 cursor-default"
+          />
+          <div className="absolute right-0 z-50 mt-2 w-[340px] overflow-hidden rounded-card border border-line bg-surface shadow-card-hover">
+            <div className="border-b border-line px-4 py-2.5">
+              <p className="text-xs font-semibold text-ink">Notifications</p>
+            </div>
+            {items.length === 0 ? (
+              <p className="px-4 py-6 text-center text-xs text-ink-subtle">
+                Nothing needs your attention right now.
+              </p>
+            ) : (
+              <ul className="max-h-[380px] divide-y divide-line overflow-y-auto">
+                {items.map((item) => (
+                  <li key={item.id}>
+                    <Link
+                      href={item.href}
+                      onClick={() => setOpen(false)}
+                      className="block px-4 py-3 outline-none transition-colors hover:bg-surface-raised focus-visible:bg-surface-raised"
+                    >
+                      <div className="flex items-start gap-2.5">
+                        <span
+                          aria-hidden="true"
+                          className={cn(
+                            'mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full',
+                            TONE[item.severity] ?? 'bg-ink-subtle',
+                          )}
+                        />
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-ink">{item.title}</p>
+                          <p className="mt-0.5 text-micro leading-relaxed text-ink-muted">
+                            {item.detail}
+                          </p>
+                        </div>
+                      </div>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -270,6 +404,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <React.Suspense fallback={<div className="h-64" />}>
             <NavItems onNavigate={() => setMobileOpen(false)} />
           </React.Suspense>
+          <div className="my-3 border-t border-line" />
+          <React.Suspense fallback={null}>
+            <NavItems groups={SECONDARY} onNavigate={() => setMobileOpen(false)} />
+          </React.Suspense>
         </div>
 
         <div className="absolute inset-x-0 bottom-0 border-t border-line px-4 py-3">
@@ -305,6 +443,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </button>
             <p className="text-sm font-medium text-ink">{currentSection(pathname)}</p>
             <div className="ml-auto flex items-center gap-2">
+              <NotificationBell />
               <ThemeToggle />
             </div>
           </div>

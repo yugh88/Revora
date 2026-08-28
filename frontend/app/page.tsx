@@ -2,7 +2,15 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { Activity, AlertCircle, ArrowRight, Loader2, Play, RotateCcw } from 'lucide-react';
+import {
+  Activity,
+  AlertCircle,
+  ArrowRight,
+  Download,
+  Loader2,
+  Play,
+  RotateCcw,
+} from 'lucide-react';
 
 import { RecoveryChart } from '../components/RecoveryChart';
 import { Button } from '../components/ui/button';
@@ -118,11 +126,12 @@ export default function OverviewPage() {
       );
       setTrend(points);
 
-      // Promises are not period-filtered: the API has no date window for them,
-      // and inventing one in the browser would produce a figure the backend
-      // could not confirm. Shown as an all-time total and labelled as such.
       try {
-        setPromises(await api.listPromises());
+        // Same window as every other figure on the page, so the promise totals
+        // and the recovery totals describe the same period. Previously this was
+        // all-time and had to be labelled as such — now it moves with the
+        // selector like everything else.
+        setPromises(await api.listPromises(undefined, window.from));
       } catch {
         setPromises(null);  // absence is not an error worth blocking the page
       }
@@ -170,6 +179,8 @@ export default function OverviewPage() {
   return (
     <AppShell>
       <main className="mx-auto max-w-[1240px] px-4 py-8 sm:px-6 lg:px-8">
+        <ReportHeader period={period} />
+
         <div className="animate-fade-up flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight text-ink sm:text-[28px]">
@@ -181,7 +192,19 @@ export default function OverviewPage() {
               money is back or it is wiser to stop.
             </p>
           </div>
-          <PeriodSelector value={period} onChange={setPeriod} disabled={loading} />
+          <div className="no-print flex shrink-0 items-center gap-2">
+            <PeriodSelector value={period} onChange={setPeriod} disabled={loading} />
+            {hasData ? (
+              <Button
+                variant="secondary"
+                onClick={() => window.print()}
+                aria-label="Download this report as a PDF"
+              >
+                <Download className="h-4 w-4" aria-hidden="true" />
+                Download report
+              </Button>
+            ) : null}
+          </div>
         </div>
 
         {historyShortfall ? (
@@ -226,6 +249,59 @@ export default function OverviewPage() {
 }
 
 /* -------------------------------------------------------------------------- */
+
+/**
+ * Report masthead. Only visible when printing.
+ *
+ * The merchant name comes from Settings, which is the only place it is
+ * recorded. Everything else on the printed page is the dashboard's own
+ * components rendering the dashboard's own data — there is no second assembly
+ * of the figures, so the report cannot disagree with the screen.
+ */
+function ReportHeader({ period }: { period: PeriodKey }) {
+  const [business, setBusiness] = React.useState('Revora Demo Merchant');
+  const [merchant, setMerchant] = React.useState('');
+
+  React.useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem('revora.preferences');
+      if (stored) {
+        const prefs = JSON.parse(stored) as {
+          businessName?: string;
+          merchantName?: string;
+        };
+        if (prefs.businessName) setBusiness(prefs.businessName);
+        if (prefs.merchantName) setMerchant(prefs.merchantName);
+      }
+    } catch {
+      // Defaults are fine.
+    }
+  }, []);
+
+  const label = PERIODS.find((option) => option.key === period)?.label ?? 'All time';
+
+  return (
+    <div className="print-only mb-6 border-b border-line pb-4">
+      <div className="flex items-start justify-between gap-6">
+        <div>
+          <p className="text-lg font-semibold tracking-tight text-ink">Revora</p>
+          <p className="text-xs text-ink-muted">Revenue recovery report</p>
+        </div>
+        <div className="text-right">
+          <p className="text-sm font-medium text-ink">{business}</p>
+          {merchant ? <p className="text-xs text-ink-muted">{merchant}</p> : null}
+          <p className="mt-1 text-xs text-ink-muted">
+            {label} · generated {new Date().toLocaleDateString(undefined, {
+              day: 'numeric',
+              month: 'long',
+              year: 'numeric',
+            })}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function PeriodSelector({
   value,
@@ -429,9 +505,9 @@ function RecoveryJourney({ money, cases }: { money: EventMoneySummary; cases: nu
  * decorative metric, and no separate money total — the fulfilled amount is the
  * ledger's, reached through the promise rows.
  *
- * Deliberately labelled "all time": the promises API has no date window, so
- * filtering these by the selected reporting period would mean inventing a
- * number the backend could not confirm.
+ * Filtered by the same reporting period as the rest of the page: the promises
+ * API takes the same date window, so these totals and the recovery totals
+ * always describe the same span of time.
  */
 function PromisesStrip({ promises }: { promises: PromiseListResponse }) {
   const counts = promises.status_breakdown;
@@ -442,7 +518,7 @@ function PromisesStrip({ promises }: { promises: PromiseListResponse }) {
       <div className="flex flex-wrap items-center gap-x-8 gap-y-4 p-5">
         <div className="min-w-0">
           <p className="text-micro font-semibold uppercase tracking-wide text-ink-subtle">
-            Promises to pay · all time
+            Promises to pay
           </p>
           <p className="mt-1 text-sm text-ink-muted">
             <span className="tabular font-medium text-ink">
@@ -574,7 +650,7 @@ function OverviewSkeleton() {
 
 function EmptyState({ onRun, running }: { onRun: () => void; running: boolean }) {
   return (
-    <Card className="animate-fade-up flex flex-col items-center px-6 py-20 text-center">
+    <Card className="no-print animate-fade-up flex flex-col items-center px-6 py-20 text-center">
       <span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-line bg-surface-raised">
         <Activity className="h-6 w-6 text-accent" aria-hidden="true" />
       </span>

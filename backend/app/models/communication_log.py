@@ -76,6 +76,11 @@ class CommunicationLog(Base):
     #: stays traceable.
     reason: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")
 
+    #: Why the agent chose this channel, in merchant language. Stored so the
+    #: explanation a merchant read at the time survives, rather than being
+    #: recomputed later from state that may have moved on.
+    channel_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
     #: Present when compliance refused, explaining which rule and why.
     blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 

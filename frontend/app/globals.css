@@ -142,3 +142,58 @@
     scroll-behavior: auto !important;
   }
 }
+
+/*
+ * Print / PDF report.
+ *
+ * "Download report" uses the browser's own print-to-PDF. That is a deliberate
+ * choice over a PDF library: it adds no dependency, needs no paid service, and
+ * — most importantly — renders the SAME component tree the dashboard already
+ * built from the same API response. A separate PDF generator would be a second
+ * place for the numbers to be assembled, and therefore a second place for them
+ * to disagree with the screen.
+ *
+ * The rules below strip the application shell so the page prints as a report
+ * rather than a screenshot of a web app.
+ */
+@media print {
+  .no-print,
+  aside,
+  header {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  main {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+
+  /* Cards become plain sections; screen elevation is meaningless on paper. */
+  .rounded-card {
+    border: 1px solid #d4d4d8 !important;
+    box-shadow: none !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  a[href]::after {
+    content: '';
+  }
+
+  @page {
+    margin: 16mm;
+  }
+}
+
+.print-only {
+  display: none;
+}

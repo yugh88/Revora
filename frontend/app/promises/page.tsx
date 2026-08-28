@@ -47,6 +47,24 @@ import type { EventSummary, PromiseListResponse, PromiseOut } from '../../lib/ty
  * writes every other recovery.
  */
 
+/** Reporting windows, matching the shape used on Overview. */
+const PROMISE_WINDOWS = [
+  { value: '1', label: 'Last day' },
+  { value: '7', label: 'Last week' },
+  { value: '30', label: 'Last month' },
+  { value: '90', label: 'Last 3 months' },
+  { value: '180', label: 'Last 6 months' },
+  { value: '365', label: 'Last 12 months' },
+  { value: '', label: 'All time' },
+] as const;
+
+function promiseSince(days: string): string | undefined {
+  if (!days) return undefined;
+  const from = new Date();
+  from.setDate(from.getDate() - Number.parseInt(days, 10));
+  return from.toISOString();
+}
+
 const STATUS_TONE: Record<string, React.ComponentProps<typeof Badge>['variant']> = {
   promised: 'accent',
   due_soon: 'pending',
@@ -58,6 +76,7 @@ const STATUS_TONE: Record<string, React.ComponentProps<typeof Badge>['variant']>
 export default function PromisesPage() {
   const [data, setData] = React.useState<PromiseListResponse | null>(null);
   const [selected, setSelected] = React.useState<PromiseOut | null>(null);
+  const [since, setSince] = React.useState('');
   const [loading, setLoading] = React.useState(true);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<ApiError | null>(null);
@@ -66,7 +85,7 @@ export default function PromisesPage() {
   const load = React.useCallback(async () => {
     setLoading(true);
     try {
-      const body = await api.listPromises();
+      const body = await api.listPromises(undefined, promiseSince(since));
       setData(body);
       setSelected((current) =>
         current ? (body.items.find((p) => p.id === current.id) ?? null) : null,
@@ -79,7 +98,7 @@ export default function PromisesPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [since]);
 
   React.useEffect(() => {
     void load();
@@ -119,6 +138,21 @@ export default function PromisesPage() {
               until the promised date, then checks whether the payment arrived.
             </p>
           </div>
+          <div className="flex flex-wrap items-end gap-6">
+            <label>
+              <span className="sr-only">Reporting period</span>
+              <select
+                value={since}
+                onChange={(event) => setSince(event.target.value)}
+                className="h-9 cursor-pointer rounded-lg border border-line bg-surface px-3 text-xs text-ink outline-none hover:border-line-strong focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/30"
+              >
+                {PROMISE_WINDOWS.map((option) => (
+                  <option key={option.value || 'all'} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
           {data && data.total > 0 ? (
             <div className="flex gap-8">
               <Figure label="Promised" value={formatInr(data.total_promised)} />
@@ -129,6 +163,7 @@ export default function PromisesPage() {
               />
             </div>
           ) : null}
+          </div>
         </div>
 
         {notice ? (

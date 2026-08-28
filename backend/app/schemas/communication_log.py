@@ -25,6 +25,8 @@ class CommunicationOut(BaseModel):
     #: Empty when compliance refused. Never partially rendered.
     body: str
     reason: str
+    #: Why this channel, in merchant language.
+    channel_reason: str
     blocked_reason: str | None
 
     #: Always true. There is no provider integration behind any of this.

@@ -33,7 +33,7 @@ system without telephony can do.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status as http_status
 from sqlalchemy import select
@@ -88,6 +88,64 @@ ACTION_CHANNEL: dict[str, Channel] = {
 CONTACT_CHANNELS = (Channel.EMAIL, Channel.SMS, Channel.VOICE_SCRIPT, Channel.IN_APP)
 
 
+def recommend_channel(
+    session: Session, event: RiskEvent, decision: Decision | None
+) -> tuple[Channel, str]:
+    """Choose how to reach this customer, and say why in plain language.
+
+    Revora is the agent; a merchant should not have to decide between email, SMS
+    and voice. This is NOT a second model. It reads signals the system already
+    holds, in a fixed order of authority:
+
+      1. the action the decision engine chose — already scored, already
+         policy-gated, and it implies a channel
+      2. the customer's own recorded preference
+      3. escalation level, because a case that has been escalated warrants a
+         more direct channel than another email
+
+    Rules, not learning. A separate classifier for something the decision engine
+    has effectively already decided would be a second opinion nobody asked for
+    and a second thing to keep honest.
+    """
+    customer = session.get(CustomerProfile, event.customer_id)
+    state = session.get(StoppingRuleState, event.id)
+    escalation = int(getattr(state, "escalation_level", 0) or 0)
+
+    action = decision.action_code if decision else None
+    implied = ACTION_CHANNEL.get(action or "")
+
+    # An escalated case has already been emailed without result. Continuing to
+    # email it is how recovery becomes noise.
+    if escalation >= 2:
+        return (
+            Channel.VOICE_SCRIPT,
+            "This case has been escalated, so Revora chose a call rather than "
+            "another message.",
+        )
+
+    if implied is not None and implied in CONTACT_CHANNELS:
+        reason = {
+            Channel.EMAIL: "The recovery action Revora chose needs a link the customer can open, so email fits best.",
+            Channel.SMS: "A short reminder is enough here, so Revora chose a text message.",
+            Channel.VOICE_SCRIPT: "This case needs a conversation, so Revora chose a call.",
+            Channel.IN_APP: "The customer is mid-session, so Revora chose an in-app message.",
+        }[implied]
+        return implied, reason
+
+    preferred = getattr(customer, "preferred_channel", None)
+    if preferred in CONTACT_CHANNELS:
+        return (
+            preferred,
+            "Revora used the channel this customer has responded on before.",
+        )
+
+    return (
+        Channel.EMAIL,
+        "No stronger signal was available, so Revora chose email as the least "
+        "intrusive way to reach this customer.",
+    )
+
+
 def _customer_name(event: RiskEvent) -> str:
     raw = event.raw_signal if isinstance(event.raw_signal, dict) else {}
     return str(raw.get("customer_name") or event.customer_id)
@@ -102,6 +160,7 @@ def _to_out(session: Session, record: CommunicationLog) -> CommunicationOut:
         status=record.status.value,
         body=record.body,
         reason=record.reason,
+        channel_reason=record.channel_reason,
         blocked_reason=record.blocked_reason,
         is_simulated=record.is_simulated,
         created_at=record.created_at.isoformat(),
@@ -120,13 +179,21 @@ def _to_out(session: Session, record: CommunicationLog) -> CommunicationOut:
 )
 def list_communications(
     channel: Channel | None = Query(default=None),
-    limit: int = Query(default=100, ge=1, le=500),
+    since: datetime | None = Query(
+        default=None, description="Only contacts prepared at or after this instant."
+    ),
+    limit: int = Query(default=200, ge=1, le=500),
     session: Session = Depends(get_db),
 ) -> CommunicationListResponse:
-    """Every recovery message, newest first. Read-only."""
+    """Recovery contact history, newest first. Read-only."""
     stmt = select(CommunicationLog).order_by(CommunicationLog.created_at.desc())
     if channel is not None:
         stmt = stmt.where(CommunicationLog.channel == channel)
+    if since is not None:
+        # Naive bounds are read as UTC rather than rejected: a query filter must
+        # never surface a backend exception to someone who cannot act on it.
+        moment = since if since.tzinfo else since.replace(tzinfo=timezone.utc)
+        stmt = stmt.where(CommunicationLog.created_at >= moment)
 
     rows = list(session.execute(stmt.limit(limit)).scalars())
     items = [_to_out(session, row) for row in rows]
@@ -176,9 +243,11 @@ def prepare_communication(
         .limit(1)
     ).scalar_one_or_none()
 
-    channel = body.channel or ACTION_CHANNEL.get(
-        decision.action_code if decision else "", Channel.EMAIL
-    )
+    # The agent picks the channel unless the caller overrides it, and always
+    # records why — a merchant should be able to see the reasoning, not just
+    # the outcome.
+    recommended, why = recommend_channel(session, event, decision)
+    channel = body.channel or recommended
     if channel not in CONTACT_CHANNELS:
         raise HTTPException(
             status_code=http_status.HTTP_400_BAD_REQUEST,
@@ -218,6 +287,7 @@ def prepare_communication(
         ),
         body=result.script if result.compliant else "",
         reason=(diagnosis.root_cause_code.value if diagnosis else "unknown"),
+        channel_reason=why if body.channel is None else "You chose this channel.",
         blocked_reason=None if result.compliant else result.failure_reason,
         is_simulated=True,
     )
