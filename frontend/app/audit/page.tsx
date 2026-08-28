@@ -7,9 +7,10 @@ import { AlertCircle, ArrowRight, FileClock, Loader2, RotateCcw, X } from 'lucid
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
-import { SiteHeader } from '../../components/ui/site-header';
+import { AppShell } from '../../components/ui/site-header';
 import { cn } from '../../components/ui/utils';
-import { api, ApiError, formatCount, formatDateTime, formatRelative, humanizeKey } from '../../lib/api-client';
+import { api, ApiError, formatCount, formatDateTime, formatRelative } from '../../lib/api-client';
+import { auditActionLabel, stageLabel } from '../../lib/labels';
 import { PIPELINE_STAGES, type AuditListResponse, type AuditQuery } from '../../lib/types';
 
 /**
@@ -76,14 +77,13 @@ export default function AuditPage() {
   const pageEnd = Math.min(offset + (data?.returned ?? 0), total);
 
   return (
-    <div className="min-h-screen">
-      <SiteHeader />
+    <AppShell>
       <main className="mx-auto max-w-[1400px] px-4 py-8 sm:px-6 lg:px-8">
         <div className="animate-fade-up">
-          <h1 className="text-2xl font-semibold tracking-tight text-ink">Audit log</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-ink">Activity log</h1>
           <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-ink-muted">
-            Every step the engine took, appended and never edited. Detection through to
-            recovery or escalation, for every event it has handled.
+            Every step Revora took on your behalf, in order and never edited — so any
+            recovery can be explained after the fact.
           </p>
         </div>
 
@@ -93,8 +93,8 @@ export default function AuditPage() {
               type="search"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Filter by event id…"
-              aria-label="Filter audit entries by event id"
+              placeholder="Filter by customer or case…"
+              aria-label="Filter activity by customer or case"
               className="h-9 min-w-[220px] flex-1 rounded-lg border border-line bg-surface px-3 text-xs text-ink outline-none transition-colors placeholder:text-ink-subtle focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/30"
             />
             <label className="relative">
@@ -107,7 +107,7 @@ export default function AuditPage() {
                 <option value="">All stages</option>
                 {PIPELINE_STAGES.map((value) => (
                   <option key={value} value={value}>
-                    {humanizeKey(value)}
+                    {stageLabel(value)}
                   </option>
                 ))}
               </select>
@@ -156,7 +156,7 @@ export default function AuditPage() {
                     aria-hidden="true"
                     className={cn('h-1.5 w-1.5 rounded-full', STAGE_TONE[value] ?? 'bg-ink-subtle')}
                   />
-                  {humanizeKey(value)}
+                  {stageLabel(value)}
                   <span className="tabular font-semibold">{data.stage_breakdown[value]}</span>
                 </button>
               ))}
@@ -174,57 +174,66 @@ export default function AuditPage() {
           ) : (
             <Card className="overflow-hidden">
               <ul className="divide-y divide-line">
-                {data.items.map((entry) => (
-                  <li key={entry.id} className="px-4 py-3 transition-colors hover:bg-surface-raised/60">
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                      <span
-                        aria-hidden="true"
-                        className={cn(
-                          'h-2 w-2 shrink-0 rounded-full',
-                          STAGE_TONE[entry.stage] ?? 'bg-ink-subtle',
-                        )}
-                      />
-                      <Badge variant="neutral">{humanizeKey(entry.stage)}</Badge>
-                      <code className="text-xs font-medium text-ink">
-                        {humanizeKey(entry.action)}
-                      </code>
+                {data.items.map((entry) => {
+                  // The WHOLE row is the target, not just the id. A real <Link>
+                  // rather than an onClick div, so middle-click, cmd-click and
+                  // the keyboard all behave the way a link should.
+                  const body = (
+                    <>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                        <span
+                          aria-hidden="true"
+                          className={cn(
+                            'h-2 w-2 shrink-0 rounded-full',
+                            STAGE_TONE[entry.stage] ?? 'bg-ink-subtle',
+                          )}
+                        />
+                        <Badge variant="neutral">{stageLabel(entry.stage)}</Badge>
+                        <span className="text-xs font-medium text-ink">
+                          {auditActionLabel(entry.action)}
+                        </span>
+                        <time
+                          dateTime={entry.timestamp}
+                          title={formatDateTime(entry.timestamp)}
+                          className="tabular ml-auto text-micro text-ink-subtle"
+                        >
+                          {formatRelative(entry.timestamp)}
+                        </time>
+                      </div>
+
+                      {entry.reasoning ? (
+                        <p className="mt-1.5 text-xs leading-relaxed text-ink-muted">
+                          {entry.reasoning}
+                        </p>
+                      ) : null}
+
+                      {entry.event_id ? (
+                        <p className="tabular mt-1.5 flex items-center gap-1 text-micro text-ink-subtle">
+                          <span>{entry.event_id}</span>
+                          <ArrowRight
+                            className="h-3 w-3 transition-transform group-hover:translate-x-0.5"
+                            aria-hidden="true"
+                          />
+                        </p>
+                      ) : null}
+                    </>
+                  );
+
+                  return (
+                    <li key={entry.id}>
                       {entry.event_id ? (
                         <Link
-                          href={`/events/${entry.event_id}`}
-                          className="tabular inline-flex items-center gap-1 rounded text-micro text-ink-subtle outline-none transition-colors hover:text-accent focus-visible:ring-2 focus-visible:ring-accent"
+                          href={`/events/${entry.event_id}?from=audit`}
+                          className="group block px-4 py-3 outline-none transition-colors hover:bg-surface-raised/70 focus-visible:bg-surface-raised/70 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
                         >
-                          {entry.event_id}
-                          <ArrowRight className="h-3 w-3" aria-hidden="true" />
+                          {body}
                         </Link>
-                      ) : null}
-                      <time
-                        dateTime={entry.timestamp}
-                        title={formatDateTime(entry.timestamp)}
-                        className="tabular ml-auto text-micro text-ink-subtle"
-                      >
-                        {formatRelative(entry.timestamp)}
-                      </time>
-                    </div>
-
-                    {entry.before_state !== null || entry.after_state !== null ? (
-                      <p className="tabular mt-1.5 flex flex-wrap items-center gap-1.5 text-micro text-ink-muted">
-                        <span className="rounded bg-line/60 px-1.5 py-0.5">
-                          {String(entry.before_state ?? '—').slice(0, 80)}
-                        </span>
-                        <span aria-hidden="true">→</span>
-                        <span className="rounded bg-accent/10 px-1.5 py-0.5 text-accent">
-                          {String(entry.after_state ?? '—').slice(0, 80)}
-                        </span>
-                      </p>
-                    ) : null}
-
-                    {entry.reasoning ? (
-                      <p className="mt-1.5 text-xs leading-relaxed text-ink-muted">
-                        {entry.reasoning}
-                      </p>
-                    ) : null}
-                  </li>
-                ))}
+                      ) : (
+                        <div className="px-4 py-3">{body}</div>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </Card>
           )}
@@ -256,7 +265,7 @@ export default function AuditPage() {
           </div>
         ) : null}
       </main>
-    </div>
+    </AppShell>
   );
 }
 
@@ -287,12 +296,12 @@ function EmptyState({ hasFilters }: { hasFilters: boolean }) {
         <FileClock className="h-5 w-5 text-ink-subtle" aria-hidden="true" />
       </span>
       <h2 className="mt-4 text-base font-semibold text-ink">
-        {hasFilters ? 'No entries match these filters' : 'Nothing audited yet'}
+        {hasFilters ? 'No activity matches these filters' : 'No activity yet'}
       </h2>
       <p className="mt-2 max-w-md text-sm leading-relaxed text-ink-muted">
         {hasFilters
-          ? 'Nothing in the log matches the current filter. Try widening it.'
-          : 'The audit log records real pipeline activity. Run a recovery analysis and every step the engine takes will appear here.'}
+          ? 'Nothing matches the current filter. Try widening it.'
+          : 'Run a recovery analysis and every step Revora takes will be recorded here.'}
       </p>
       {!hasFilters ? (
         <Button asChild className="mt-5">
@@ -311,8 +320,13 @@ function ErrorState({ error, onRetry, busy }: { error: ApiError; onRetry: () => 
           <AlertCircle className="h-5 w-5 text-unrecoverable" aria-hidden="true" />
         </span>
         <div className="min-w-0 flex-1">
-          <h2 className="text-sm font-semibold text-ink">Could not load the audit log</h2>
-          <p className="mt-1.5 text-sm leading-relaxed text-ink-muted">{error.userMessage}</p>
+          <h2 className="text-sm font-semibold text-ink">
+            Your activity log could not be loaded
+          </h2>
+          <p className="mt-1.5 text-sm leading-relaxed text-ink-muted">
+            Revora did not change anything. This was a problem reading the log, not
+            recovering money.
+          </p>
           <Button variant="secondary" size="sm" className="mt-4" onClick={onRetry} disabled={busy}>
             {busy ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />

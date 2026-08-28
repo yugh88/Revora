@@ -239,6 +239,9 @@ class PromiseStatus(str, Enum):
     PENDING = "pending"
     KEPT = "kept"
     BROKEN = "broken"
+    #: The customer or merchant withdrew the promise before its date. Distinct
+    #: from BROKEN: nothing was owed on it, so it must never become a recovery.
+    CANCELLED = "cancelled"
 
 
 class AuditActor(str, Enum):
@@ -264,3 +267,32 @@ class AuditStage(str, Enum):
     VERIFICATION = "verification"
     RECOVERY = "recovery"
     ESCALATION = "escalation"
+
+
+class CommunicationStatus(str, Enum):
+    """What has actually happened to a recovery message.
+
+    There is deliberately no "sent" or "delivered". Revora has no provider
+    integration, so claiming either would be a lie a merchant could act on.
+    SIMULATED means the demo represented a send; nobody was contacted.
+    """
+
+    #: Written and compliance-checked, but not yet put through the demo send.
+    PREPARED = "prepared"
+    #: The demo represented sending it. No customer was contacted.
+    SIMULATED = "simulated"
+    #: Compliance refused it, so no message text exists at all.
+    BLOCKED = "blocked"
+
+
+class CustomerResponse(str, Enum):
+    """What a simulated customer did about a recovery message.
+
+    Simulated in the demo, never observed. Nothing here may be inferred from a
+    message having been prepared or sent — a customer who has not answered has
+    simply not answered.
+    """
+
+    PROMISED_TO_PAY = "promised_to_pay"
+    PAID = "paid"
+    NO_RESPONSE = "no_response"

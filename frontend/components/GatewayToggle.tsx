@@ -35,8 +35,8 @@ interface Option {
 const OPTIONS: Option[] = [
   {
     value: 'local_simulation',
-    label: 'Built-in simulator',
-    tagline: 'Deterministic, self-contained, no credentials.',
+    label: 'Built-in Simulator',
+    tagline: 'Reliable demo mode using Revora\u2019s deterministic payment simulation.',
     points: [
       'Fully self-built — no external service is contacted',
       'Same seed produces the same outcome every run',
@@ -47,8 +47,8 @@ const OPTIONS: Option[] = [
   },
   {
     value: 'razorpay_test',
-    label: 'Razorpay test sandbox',
-    tagline: 'Razorpay\u2019s free test mode. No real money, ever.',
+    label: 'Razorpay Test Sandbox',
+    tagline: 'Execute test recovery actions against Razorpay\u2019s test environment. No real money, ever.',
     points: [
       'Requires RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET on the backend',
       'Test-mode keys only — a live key is refused at startup',
@@ -71,7 +71,7 @@ export function GatewayToggle({
   return (
     <fieldset disabled={disabled} className="min-w-0">
       <legend className="text-micro font-semibold uppercase text-ink-subtle">
-        Execution gateway
+        Recovery execution
       </legend>
 
       {/* radiogroup semantics: arrow keys move between options, exactly as a

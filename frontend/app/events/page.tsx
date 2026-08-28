@@ -1,18 +1,19 @@
 'use client';
 
 import * as React from 'react';
+import { useSearchParams } from 'next/navigation';
 import { AlertCircle, Inbox, Loader2, RotateCcw, Search, X } from 'lucide-react';
 
 import { EventTable } from '../../components/EventTable';
 import { STATUS_LABEL } from '../../components/StatusBadge';
 import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
-import { SiteHeader } from '../../components/ui/site-header';
+import { AppShell } from '../../components/ui/site-header';
 import { cn } from '../../components/ui/utils';
 import { api, ApiError, formatCount } from '../../lib/api-client';
+import { eventTypeLabel } from '../../lib/labels';
 import {
   EVENT_TYPES,
-  EVENT_TYPE_LABELS,
   type EventListQuery,
   type EventListResponse,
   type EventStatus,
@@ -45,12 +46,26 @@ const STATUSES: EventStatus[] = [
 type ReviewFilter = 'all' | 'review' | 'clean';
 
 export default function EventsPage() {
+  return (
+    <React.Suspense fallback={null}>
+      <EventsFeed />
+    </React.Suspense>
+  );
+}
+
+function EventsFeed() {
   const [data, setData] = React.useState<EventListResponse | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<ApiError | null>(null);
 
+  // The sidebar deep-links here with ?type=..., and the API applies that filter
+  // server-side. Reading it from the URL is what makes those six sub-items real
+  // navigation rather than labels that all land on the same unfiltered list.
+  const searchParams = useSearchParams();
+  const urlType = searchParams.get('type') as EventType | null;
+
   const [status, setStatus] = React.useState<EventStatus | ''>('');
-  const [type, setType] = React.useState<EventType | ''>('');
+  const [type, setType] = React.useState<EventType | ''>(urlType ?? '');
   const [review, setReview] = React.useState<ReviewFilter>('all');
   const [search, setSearch] = React.useState('');
   const [debounced, setDebounced] = React.useState('');
@@ -61,6 +76,12 @@ export default function EventsPage() {
     const timer = setTimeout(() => setDebounced(search.trim()), 300);
     return () => clearTimeout(timer);
   }, [search]);
+
+  // Follow the URL when the sidebar changes it, so clicking Payments then
+  // Subscriptions actually moves the feed rather than leaving stale state.
+  React.useEffect(() => {
+    setType(urlType ?? '');
+  }, [urlType]);
 
   // Any filter change resets pagination — staying on page 4 of a result set
   // that now has one page would show an empty table for no reason.
@@ -105,16 +126,17 @@ export default function EventsPage() {
   const pageEnd = Math.min(offset + (data?.returned ?? 0), total);
 
   return (
-    <div className="min-h-screen">
-      <SiteHeader />
+    <AppShell>
 
       <main className="mx-auto max-w-[1400px] px-4 py-8 sm:px-6 lg:px-8">
         <div className="animate-fade-up flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-ink">Events</h1>
+            <h1 className="text-2xl font-semibold tracking-tight text-ink">
+              {type ? eventTypeLabel(type) : 'All recoveries'}
+            </h1>
             <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-ink-muted">
-              Every unit of revenue at risk the engine has detected, with what it
-              diagnosed and what it decided to do.
+              Every case Revora is working — what happened, why, and what it decided to
+              do about it.
             </p>
           </div>
           {data && data.needs_review_count > 0 ? (
@@ -152,8 +174,8 @@ export default function EventsPage() {
                 type="search"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search event, customer or correlation id…"
-                aria-label="Search events"
+                placeholder="Search by customer…"
+                aria-label="Search recoveries by customer"
                 className="h-9 w-full rounded-lg border border-line bg-surface pl-8 pr-3 text-xs text-ink outline-none transition-colors placeholder:text-ink-subtle focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/30"
               />
             </div>
@@ -163,18 +185,18 @@ export default function EventsPage() {
               value={status}
               onChange={(value) => setStatus(value as EventStatus | '')}
               options={[
-                { value: '', label: 'All statuses' },
+                { value: '', label: 'All status' },
                 ...STATUSES.map((s) => ({ value: s, label: STATUS_LABEL[s] })),
               ]}
             />
 
             <FilterSelect
-              label="Type"
+              label="Issue"
               value={type}
               onChange={(value) => setType(value as EventType | '')}
               options={[
-                { value: '', label: 'All types' },
-                ...EVENT_TYPES.map((t) => ({ value: t, label: EVENT_TYPE_LABELS[t] })),
+                { value: '', label: 'All issues' },
+                ...EVENT_TYPES.map((t) => ({ value: t, label: eventTypeLabel(t) })),
               ]}
             />
 
@@ -183,7 +205,7 @@ export default function EventsPage() {
               value={review}
               onChange={(value) => setReview(value as ReviewFilter)}
               options={[
-                { value: 'all', label: 'All events' },
+                { value: 'all', label: 'All cases' },
                 { value: 'review', label: 'Needs review' },
                 { value: 'clean', label: 'No review needed' },
               ]}
@@ -248,7 +270,7 @@ export default function EventsPage() {
           </div>
         ) : null}
       </main>
-    </div>
+    </AppShell>
   );
 }
 
@@ -323,12 +345,12 @@ function EmptyState({
         <Inbox className="h-5 w-5 text-ink-subtle" aria-hidden="true" />
       </span>
       <h2 className="mt-4 text-base font-semibold text-ink">
-        {hasFilters ? 'No events match these filters' : 'No events yet'}
+        {hasFilters ? 'No recoveries match these filters' : 'No recoveries yet'}
       </h2>
       <p className="mt-2 max-w-md text-sm leading-relaxed text-ink-muted">
         {hasFilters
-          ? 'Nothing in the feed matches the current combination. Try widening it.'
-          : 'The engine has not processed anything yet. Run a recovery analysis and the events it detects will appear here.'}
+          ? 'Nothing matches the current combination. Try widening it.'
+          : 'Run a recovery analysis and the revenue Revora finds at risk will appear here.'}
       </p>
       <div className="mt-5">
         {hasFilters ? (
@@ -362,9 +384,12 @@ function ErrorState({
           <AlertCircle className="h-5 w-5 text-unrecoverable" aria-hidden="true" />
         </span>
         <div className="min-w-0 flex-1">
-          <h2 className="text-sm font-semibold text-ink">Could not load events</h2>
+          <h2 className="text-sm font-semibold text-ink">
+            Your recoveries could not be loaded
+          </h2>
           <p className="mt-1.5 text-sm leading-relaxed text-ink-muted">
-            {error.userMessage}
+            Revora did not change anything. This was a problem reading your recoveries,
+            not working them.
           </p>
           <Button
             variant="secondary"

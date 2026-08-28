@@ -2,14 +2,14 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { AlertCircle, ArrowLeft, Loader2, RotateCcw, SearchX } from 'lucide-react';
 
 import { AuditTimeline } from '../../../components/AuditTimeline';
 import { EventDrilldown } from '../../../components/EventDrilldown';
 import { Button } from '../../../components/ui/button';
 import { Card } from '../../../components/ui/card';
-import { SiteHeader } from '../../../components/ui/site-header';
+import { AppShell } from '../../../components/ui/site-header';
 import { api, ApiError } from '../../../lib/api-client';
 import type { EventDetailResponse } from '../../../lib/types';
 
@@ -21,9 +21,25 @@ import type { EventDetailResponse } from '../../../lib/types';
  * so a button offering any of those would be a lie about what the product can
  * do. When such an endpoint exists, the button can be added with it.
  */
+/** Known navigation origins. Anything else falls back to Events. */
+const ORIGINS: Record<string, { href: string; label: string }> = {
+  events: { href: '/events', label: 'Back to Events' },
+  audit: { href: '/audit', label: 'Back to Audit' },
+  scripts: { href: '/scripts', label: 'Back to Recovery Messages' },
+  batch: { href: '/batch', label: 'Back to Run Recovery' },
+  promises: { href: '/promises', label: 'Back to Promises to Pay' },
+  communications: { href: '/communications', label: 'Back to Communications' },
+};
+
 export default function EventDetailPage() {
   const params = useParams<{ id: string }>();
   const eventId = typeof params?.id === 'string' ? params.id : '';
+
+  // Where the user came from, so "Back" tells the truth. Falls back to Events
+  // for a direct link or a bookmark, which is the only sensible default when
+  // there is no origin to honour.
+  const searchParams = useSearchParams();
+  const origin = ORIGINS[searchParams.get('from') ?? ''] ?? ORIGINS.events;
 
   const [detail, setDetail] = React.useState<EventDetailResponse | null>(null);
   const [loading, setLoading] = React.useState(true);
@@ -51,28 +67,25 @@ export default function EventDetailPage() {
   const notFound = error?.status === 404;
 
   return (
-    <div className="min-h-screen">
-      <SiteHeader />
+    <AppShell>
 
       <main className="mx-auto max-w-[1400px] px-4 py-8 sm:px-6 lg:px-8">
         <div className="animate-fade-up">
           <Button asChild variant="ghost" size="sm" className="-ml-2">
-            <Link href="/events">
+            <Link href={origin.href}>
               <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
-              Back to events
+              {origin.label}
             </Link>
           </Button>
 
           <div className="mt-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
             <h1 className="text-2xl font-semibold tracking-tight text-ink">
-              Event drill-down
+              Recovery details
             </h1>
-            <code className="tabular text-sm text-ink-subtle">{eventId}</code>
           </div>
           <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-ink-muted">
-            Detection through to outcome — what was diagnosed, what the classifier
-            independently thought, what was decided, which policy applied, and every
-            audited step in between.
+            What happened, why, what Revora decided to do about it, and how it turned
+            out.
           </p>
         </div>
 
@@ -99,14 +112,14 @@ export default function EventDetailPage() {
           ) : null}
         </div>
       </main>
-    </div>
+    </AppShell>
   );
 }
 
 function DetailSkeleton() {
   return (
     <div className="space-y-5" role="status" aria-busy="true">
-      <span className="sr-only">Loading event</span>
+      <span className="sr-only">Loading this recovery</span>
       {[0, 1, 2].map((index) => (
         <Card key={index} className="p-5">
           <div className="h-3.5 w-40 animate-pulse rounded bg-line/60" />
@@ -131,16 +144,17 @@ function NotFoundState({ eventId }: { eventId: string }) {
       <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-line bg-surface-raised">
         <SearchX className="h-5 w-5 text-ink-subtle" aria-hidden="true" />
       </span>
-      <h2 className="mt-4 text-base font-semibold text-ink">No such event</h2>
+      <h2 className="mt-4 text-base font-semibold text-ink">
+        This recovery is no longer available
+      </h2>
       <p className="mt-2 max-w-md text-sm leading-relaxed text-ink-muted">
-        Nothing in the ledger matches <code className="text-ink">{eventId}</code>. It may
-        belong to a database that has since been reset — synthetic events are recreated
-        with new identifiers on each run.
+        It may belong to an earlier demonstration run. Your current recoveries are all
+        listed under Revenue Recovery.
       </p>
       <Button asChild variant="secondary" className="mt-5">
         <Link href="/events">
           <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-          Back to events
+          Back to Events
         </Link>
       </Button>
     </Card>
@@ -163,9 +177,12 @@ function ErrorState({
           <AlertCircle className="h-5 w-5 text-unrecoverable" aria-hidden="true" />
         </span>
         <div className="min-w-0 flex-1">
-          <h2 className="text-sm font-semibold text-ink">Could not load this event</h2>
+          <h2 className="text-sm font-semibold text-ink">
+            This recovery could not be loaded
+          </h2>
           <p className="mt-1.5 text-sm leading-relaxed text-ink-muted">
-            {error.userMessage}
+            Revora did not change anything. This was a problem reading the case, not
+            working it.
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
             <Button variant="secondary" size="sm" onClick={onRetry} disabled={busy}>
@@ -177,7 +194,7 @@ function ErrorState({
               Try again
             </Button>
             <Button asChild variant="ghost" size="sm">
-              <Link href="/events">Back to events</Link>
+              <Link href="/events">Back to Events</Link>
             </Button>
           </div>
         </div>

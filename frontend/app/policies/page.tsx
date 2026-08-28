@@ -6,7 +6,7 @@ import { AlertCircle, Loader2, RotateCcw } from 'lucide-react';
 import { PolicyForm } from '../../components/PolicyForm';
 import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
-import { SiteHeader } from '../../components/ui/site-header';
+import { AppShell } from '../../components/ui/site-header';
 import { api, ApiError } from '../../lib/api-client';
 import type { PolicyListResponse, PolicyUpdate } from '../../lib/types';
 
@@ -68,8 +68,7 @@ export default function PoliciesPage() {
   );
 
   return (
-    <div className="min-h-screen">
-      <SiteHeader />
+    <AppShell>
       <main className="mx-auto max-w-[1400px] px-4 py-8 sm:px-6 lg:px-8">
         <div className="animate-fade-up flex flex-wrap items-end justify-between gap-4">
           <div>
@@ -106,7 +105,7 @@ export default function PoliciesPage() {
           ) : null}
         </div>
       </main>
-    </div>
+    </AppShell>
   );
 }
 

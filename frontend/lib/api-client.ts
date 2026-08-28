@@ -19,6 +19,13 @@ import type {
   EventListResponse,
   EventType,
   HealthResponse,
+  CommunicationListResponse,
+  CommunicationOut,
+  PromiseCreate,
+  PromiseListResponse,
+  PromiseOut,
+  RunDetailResponse,
+  RunListResponse,
   PolicyListResponse,
   PolicyUpdate,
   PolicyOut,
@@ -215,6 +222,121 @@ export const api = {
   },
 
   /**
+   * GET /scripts/{id}/preview — the same engine, evaluated at a deterministic
+   * instant inside the permitted contact window.
+   *
+   * A demonstration, not a contact. Every other compliance rule still runs for
+   * real, and nothing is written. Used so the Hinglish capability is visible
+   * outside 08:00-19:00 IST.
+   */
+  previewScript(eventId: string): Promise<ScriptResponse> {
+    return request<ScriptResponse>(
+      `/scripts/${encodeURIComponent(eventId)}/preview`,
+      { method: 'GET' },
+    );
+  },
+
+  /** GET /communications — recovery contacts. Read-only. */
+  listCommunications(channel?: string): Promise<CommunicationListResponse> {
+    return request<CommunicationListResponse>(`/communications${buildQuery({ channel })}`, {
+      method: 'GET',
+    });
+  },
+
+  /**
+   * POST /communications/prepare — write the message Revora would send.
+   * Contacts nobody; a message refused by policy is recorded with no text.
+   */
+  prepareCommunication(eventId: string, channel?: string): Promise<CommunicationOut> {
+    return request<CommunicationOut>('/communications/prepare', {
+      method: 'POST',
+      body: JSON.stringify({ event_id: eventId, channel }),
+    });
+  },
+
+  /** POST /communications/{id}/simulate-send — represents a send. Nothing goes out. */
+  simulateSend(id: string): Promise<CommunicationOut> {
+    return request<CommunicationOut>(
+      `/communications/${encodeURIComponent(id)}/simulate-send`,
+      { method: 'POST' },
+    );
+  },
+
+  /**
+   * POST /communications/{id}/simulate-response — represents a customer reply.
+   * A commitment to pay creates a real Promise to Pay on the same case.
+   */
+  simulateResponse(
+    id: string,
+    body: { response: string; promised_amount?: string; promised_date?: string },
+  ): Promise<CommunicationOut> {
+    return request<CommunicationOut>(
+      `/communications/${encodeURIComponent(id)}/simulate-response`,
+      { method: 'POST', body: JSON.stringify(body) },
+    );
+  },
+
+  /** GET /promises — every promise, with derived merchant status. Read-only. */
+  listPromises(status?: string): Promise<PromiseListResponse> {
+    return request<PromiseListResponse>(`/promises${buildQuery({ status })}`, {
+      method: 'GET',
+    });
+  },
+
+  /** GET /promises/{id} */
+  getPromise(id: string): Promise<PromiseOut> {
+    return request<PromiseOut>(`/promises/${encodeURIComponent(id)}`, { method: 'GET' });
+  },
+
+  /** POST /promises — record a customer's commitment. Contacts nobody. */
+  createPromise(body: PromiseCreate): Promise<PromiseOut> {
+    return request<PromiseOut>('/promises', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+
+  /**
+   * POST /promises/{id}/fulfil — record that the promised payment arrived.
+   * Charges nothing; records the consequence of a confirmed payment.
+   */
+  fulfilPromise(id: string, paidAmount?: string): Promise<PromiseOut> {
+    return request<PromiseOut>(`/promises/${encodeURIComponent(id)}/fulfil`, {
+      method: 'POST',
+      body: JSON.stringify(paidAmount ? { paid_amount: paidAmount } : {}),
+    });
+  },
+
+  /** POST /promises/{id}/cancel — withdraw a promise. Never becomes a recovery. */
+  cancelPromise(id: string): Promise<PromiseOut> {
+    return request<PromiseOut>(`/promises/${encodeURIComponent(id)}/cancel`, {
+      method: 'POST',
+    });
+  },
+
+  /** POST /promises/evaluate — record promises whose date has passed unpaid. */
+  evaluatePromises(): Promise<PromiseListResponse> {
+    return request<PromiseListResponse>('/promises/evaluate', { method: 'POST' });
+  },
+
+  /** GET /batch/runs — completed runs, newest first. Read-only. */
+  listRuns(limit = 8): Promise<RunListResponse> {
+    return request<RunListResponse>(`/batch/runs?limit=${limit}`, { method: 'GET' });
+  },
+
+  /**
+   * GET /batch/runs/{id} — reopen a completed run.
+   *
+   * Returns the stored snapshot, so a past run always shows the figures the
+   * merchant actually saw rather than a fresh recomputation.
+   */
+  getRun(runId: string): Promise<RunDetailResponse> {
+    return request<RunDetailResponse>(`/batch/runs/${encodeURIComponent(runId)}`, {
+      method: 'GET',
+    });
+  },
+
+  /**
    * POST /batch — run N synthetic records through the real pipeline.
    *
    * This MUTATES: it detects, diagnoses, decides, gates and executes, then
@@ -350,3 +472,116 @@ export function humanizeKey(key: string): string {
 }
 
 export type { EventType };
+
+/* --------------------------------------------------------------------------
+ * Reporting periods
+ * --------------------------------------------------------------------------
+ * A period is a real date window sent to the API as detected_from/detected_to,
+ * which recomputes every amount server-side from the ledger. Nothing here
+ * filters in the browser, so the selector genuinely changes the numbers rather
+ * than relabelling the same ones.
+ */
+
+export type PeriodKey = 'this_month' | 'last_6_months' | 'last_12_months' | 'all_time';
+
+export const PERIODS: Array<{ key: PeriodKey; label: string }> = [
+  { key: 'this_month', label: 'This month' },
+  { key: 'last_6_months', label: 'Last 6 months' },
+  { key: 'last_12_months', label: 'Last 12 months' },
+  { key: 'all_time', label: 'All time' },
+];
+
+export interface PeriodWindow {
+  from?: string;
+  to?: string;
+}
+
+/** Start of the window for a period. All-time deliberately has no lower bound. */
+export function periodWindow(key: PeriodKey, now = new Date()): PeriodWindow {
+  if (key === 'all_time') return {};
+  if (key === 'this_month') {
+    return { from: new Date(now.getFullYear(), now.getMonth(), 1).toISOString() };
+  }
+  const months = key === 'last_6_months' ? 6 : 12;
+  const from = new Date(now.getFullYear(), now.getMonth() - (months - 1), 1);
+  return { from: from.toISOString() };
+}
+
+export interface TrendBucket {
+  label: string;
+  from: string;
+  to: string;
+}
+
+/**
+ * Time buckets for the trend chart.
+ *
+ * Weekly within a month, monthly across longer spans — a twelve-month chart
+ * drawn daily is unreadable, and a one-month chart drawn monthly is a single
+ * bar. All-time starts at the earliest event actually recorded, so the axis
+ * never extends into months that never existed.
+ */
+export function trendBuckets(
+  key: PeriodKey,
+  earliest: string | null,
+  now = new Date(),
+): TrendBucket[] {
+  const buckets: TrendBucket[] = [];
+
+  if (key === 'this_month') {
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    let cursor = start;
+    let week = 1;
+    while (cursor <= now) {
+      const end = new Date(cursor);
+      end.setDate(end.getDate() + 6);
+      end.setHours(23, 59, 59, 999);
+      buckets.push({
+        label: `Week ${week}`,
+        from: cursor.toISOString(),
+        to: (end > now ? now : end).toISOString(),
+      });
+      const next = new Date(cursor);
+      next.setDate(next.getDate() + 7);
+      cursor = next;
+      week += 1;
+    }
+    return buckets;
+  }
+
+  let months = key === 'last_6_months' ? 6 : 12;
+  if (key === 'all_time') {
+    const first = earliest ? new Date(earliest) : now;
+    months =
+      (now.getFullYear() - first.getFullYear()) * 12 +
+      (now.getMonth() - first.getMonth()) +
+      1;
+    months = Math.max(1, Math.min(months, 24));
+  }
+
+  for (let index = months - 1; index >= 0; index -= 1) {
+    const start = new Date(now.getFullYear(), now.getMonth() - index, 1);
+    const end = new Date(now.getFullYear(), now.getMonth() - index + 1, 0, 23, 59, 59, 999);
+    buckets.push({
+      label: start.toLocaleDateString(undefined, { month: 'short' }),
+      from: start.toISOString(),
+      to: end.toISOString(),
+    });
+  }
+  return buckets;
+}
+
+/**
+ * How much history actually exists, in whole months.
+ *
+ * Used to tell the merchant "only N months of recovery history are available"
+ * rather than drawing an empty year and letting them assume recovery collapsed.
+ */
+export function monthsOfHistory(earliest: string | null, now = new Date()): number {
+  if (!earliest) return 0;
+  const first = new Date(earliest);
+  if (Number.isNaN(first.getTime())) return 0;
+  return (
+    (now.getFullYear() - first.getFullYear()) * 12 + (now.getMonth() - first.getMonth()) + 1
+  );
+}

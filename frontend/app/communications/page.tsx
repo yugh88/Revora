@@ -1,0 +1,722 @@
+'use client';
+
+import * as React from 'react';
+import { useSearchParams } from 'next/navigation';
+import Link from 'next/link';
+import {
+  AlertCircle,
+  ArrowRight,
+  CheckCircle2,
+  Loader2,
+  Mail,
+  MessageSquare,
+  PhoneCall,
+  RotateCcw,
+  Send,
+  Eye,
+  ShieldX,
+  Smartphone,
+} from 'lucide-react';
+
+import { Badge } from '../../components/ui/badge';
+import { Button } from '../../components/ui/button';
+import { Card, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
+import { AppShell } from '../../components/ui/site-header';
+import { cn } from '../../components/ui/utils';
+import {
+  api,
+  ApiError,
+  formatDateTime,
+  formatInr,
+} from '../../lib/api-client';
+import {
+  communicationNextStep,
+  communicationStatusLabel,
+  communicationStatusMeaning,
+  contactLabel,
+  customerResponseLabel,
+  rootCauseLabel,
+} from '../../lib/labels';
+import type {
+  CommunicationListResponse,
+  CommunicationOut,
+  EventSummary,
+  ScriptResponse,
+} from '../../lib/types';
+
+/**
+ * Recovery communications — Email, SMS and Voice.
+ *
+ * This is the conversation half of recovery: Revora decides someone should be
+ * contacted, writes the message, and this is where a merchant sees what it
+ * would say and what came of it.
+ *
+ * NOTHING IS SENT FROM HERE. There is no email, SMS or voice provider behind
+ * any of it, so every action is labelled a simulation and the word "sent"
+ * appears only as "Demo sent". A judge should never be able to mistake a
+ * represented message for a delivered one.
+ *
+ * A simulated customer reply of "I'll pay by..." creates a real Promise to Pay
+ * on the same case, which is how a promise comes to exist as a consequence of
+ * the conversation rather than something typed in on the customer's behalf.
+ */
+
+const CHANNELS = [
+  { value: '', label: 'All channels', icon: MessageSquare },
+  { value: 'email', label: 'Email', icon: Mail },
+  { value: 'sms', label: 'SMS', icon: Smartphone },
+  { value: 'voice_script', label: 'Voice', icon: PhoneCall },
+] as const;
+
+const CHANNEL_ICON: Record<string, typeof Mail> = {
+  email: Mail,
+  sms: Smartphone,
+  voice_script: PhoneCall,
+  in_app: MessageSquare,
+};
+
+const STATUS_TONE: Record<string, React.ComponentProps<typeof Badge>['variant']> = {
+  prepared: 'neutral',
+  simulated: 'accent',
+  blocked: 'unrecoverable',
+};
+
+export default function CommunicationsPage() {
+  return (
+    <React.Suspense fallback={null}>
+      <Communications />
+    </React.Suspense>
+  );
+}
+
+function Communications() {
+  const [data, setData] = React.useState<CommunicationListResponse | null>(null);
+  const [selected, setSelected] = React.useState<CommunicationOut | null>(null);
+  // The sidebar deep-links with ?channel=, and the API applies that filter
+  // server-side — which is what makes those sub-items real navigation.
+  const searchParams = useSearchParams();
+  const urlChannel = searchParams.get('channel') ?? '';
+  const [channel, setChannel] = React.useState(urlChannel);
+
+  React.useEffect(() => {
+    setChannel(urlChannel);
+  }, [urlChannel]);
+  const [loading, setLoading] = React.useState(true);
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<ApiError | null>(null);
+  const [notice, setNotice] = React.useState<string | null>(null);
+
+  const load = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      const body = await api.listCommunications(channel || undefined);
+      setData(body);
+      setSelected((current) =>
+        current ? (body.items.find((c) => c.id === current.id) ?? null) : null,
+      );
+      setError(null);
+    } catch (caught) {
+      setError(
+        caught instanceof ApiError
+          ? caught
+          : new ApiError('Recovery messages could not be loaded.'),
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [channel]);
+
+  React.useEffect(() => {
+    void load();
+  }, [load]);
+
+  const act = React.useCallback(
+    async (fn: () => Promise<unknown>, message: string) => {
+      setBusy(true);
+      setNotice(null);
+      try {
+        await fn();
+        await load();
+        setNotice(message);
+      } catch (caught) {
+        setError(
+          caught instanceof ApiError ? caught : new ApiError('That could not be completed.'),
+        );
+      } finally {
+        setBusy(false);
+      }
+    },
+    [load],
+  );
+
+  const items = data?.items ?? [];
+
+  return (
+    <AppShell>
+      <main className="mx-auto max-w-[1240px] px-4 py-8 sm:px-6 lg:px-8">
+        <div className="animate-fade-up">
+          <h1 className="text-2xl font-semibold tracking-tight text-ink">
+            Recovery communications
+          </h1>
+          <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-ink-muted">
+            The messages Revora would send to win revenue back, and what came of each
+            conversation.
+          </p>
+          <p className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface-raised/60 px-2.5 py-1.5 text-xs text-ink-muted">
+            <ShieldX className="h-3.5 w-3.5 shrink-0 text-ink-subtle" aria-hidden="true" />
+            Demo communication — no customer is contacted.
+          </p>
+        </div>
+
+        {notice ? (
+          <p className="animate-fade-up mt-4 flex items-center gap-2 rounded-lg border border-accent/25 bg-accent/5 px-3.5 py-2.5 text-xs text-ink-muted">
+            <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden="true" />
+            {notice}
+          </p>
+        ) : null}
+
+        <div className="animate-fade-up stagger-1 mt-5 flex flex-wrap gap-1.5">
+          {CHANNELS.map((option) => {
+            const Icon = option.icon;
+            const active = option.value === channel;
+            return (
+              <button
+                key={option.value || 'all'}
+                type="button"
+                onClick={() => setChannel(option.value)}
+                aria-pressed={active}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors',
+                  'outline-none focus-visible:ring-2 focus-visible:ring-accent',
+                  active
+                    ? 'border-accent/40 bg-accent/[0.07] text-ink'
+                    : 'border-line text-ink-subtle hover:border-line-strong hover:text-ink',
+                )}
+              >
+                <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                {option.label}
+                {data && option.value && data.channel_breakdown[option.value] ? (
+                  <span className="tabular text-ink-subtle">
+                    {data.channel_breakdown[option.value]}
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-3">
+          <div className="lg:col-span-2">
+            {error ? (
+              <ErrorState onRetry={() => void load()} busy={loading} />
+            ) : loading && !data ? (
+              <ListSkeleton />
+            ) : items.length === 0 ? (
+              <EmptyState />
+            ) : (
+              <Card className="overflow-hidden">
+                <ul className="divide-y divide-line">
+                  {items.map((item) => {
+                    const Icon = CHANNEL_ICON[item.channel] ?? MessageSquare;
+                    return (
+                      <li key={item.id}>
+                        <button
+                          type="button"
+                          onClick={() => setSelected(item)}
+                          aria-current={selected?.id === item.id ? 'true' : undefined}
+                          className={cn(
+                            'block w-full px-4 py-3.5 text-left outline-none transition-colors',
+                            'focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent',
+                            selected?.id === item.id
+                              ? 'bg-accent/[0.06]'
+                              : 'hover:bg-surface-raised/70',
+                          )}
+                        >
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                            <Icon
+                              className="h-3.5 w-3.5 shrink-0 text-ink-subtle"
+                              aria-hidden="true"
+                            />
+                            <span className="text-sm font-medium text-ink">
+                              {item.customer_name}
+                            </span>
+                            <Badge variant={STATUS_TONE[item.status] ?? 'neutral'}>
+                              {communicationStatusLabel(item.status)}
+                            </Badge>
+                            <span className="tabular ml-auto text-xs text-ink-subtle">
+                              {formatDateTime(item.created_at)}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-xs text-ink-subtle">
+                            {contactLabel(item.channel)} · {rootCauseLabel(item.reason)}
+                          </p>
+                          {item.customer_response ? (
+                            <p className="mt-1 text-micro text-accent">
+                              {customerResponseLabel(item.customer_response)}
+                            </p>
+                          ) : null}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </Card>
+            )}
+          </div>
+
+          <div className="lg:col-span-1">
+            {selected ? (
+              <ContactDetail
+                contact={selected}
+                busy={busy}
+                onSend={() =>
+                  void act(
+                    () => api.simulateSend(selected.id),
+                    'Message simulated. No customer was contacted.',
+                  )
+                }
+                onRespond={(body, message) =>
+                  void act(() => api.simulateResponse(selected.id, body), message)
+                }
+              />
+            ) : (
+              <PrepareContact
+                busy={busy}
+                onPrepare={(eventId, chosen) =>
+                  void act(
+                    () => api.prepareCommunication(eventId, chosen),
+                    'Recovery message prepared. Nothing has been sent.',
+                  )
+                }
+              />
+            )}
+          </div>
+        </div>
+      </main>
+    </AppShell>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+
+function ContactDetail({
+  contact,
+  busy,
+  onSend,
+  onRespond,
+}: {
+  contact: CommunicationOut;
+  busy: boolean;
+  onSend: () => void;
+  onRespond: (
+    body: { response: string; promised_amount?: string; promised_date?: string },
+    message: string,
+  ) => void;
+}) {
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 3);
+  const [date, setDate] = React.useState(tomorrow.toISOString().slice(0, 10));
+
+  return (
+    <Card className="sticky top-24">
+      <CardHeader>
+        <CardTitle>{contactLabel(contact.channel)}</CardTitle>
+        <CardDescription>
+          {contact.customer_name} · {rootCauseLabel(contact.reason)}
+        </CardDescription>
+      </CardHeader>
+
+      <div className="px-5 pb-5">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant={STATUS_TONE[contact.status] ?? 'neutral'}>
+            {communicationStatusLabel(contact.status)}
+          </Badge>
+          {contact.is_simulated ? <Badge variant="neutral">Demo</Badge> : null}
+        </div>
+        <p className="mt-2 text-xs leading-relaxed text-ink-muted">
+          {communicationStatusMeaning(contact.status)}
+        </p>
+
+        {contact.status === 'blocked' ? (
+          <>
+            <div className="mt-3 rounded-lg border border-unrecoverable/25 bg-unrecoverable/5 px-3 py-2.5">
+              <p className="text-xs font-medium text-ink">No message was written.</p>
+              <p className="mt-1 text-xs leading-relaxed text-ink-muted">
+                {contact.blocked_reason}
+              </p>
+            </div>
+            {/* Held back only by contact hours? Then the same message would be
+                written during permitted hours, and a judge arriving in the
+                evening should be able to see it. Reuses the existing read-only
+                preview: it moves the clock for the contact-hours check alone,
+                runs every other rule for real, and writes nothing. */}
+            {blockedOnlyByHours(contact.blocked_reason) ? (
+              <BlockedPreview eventId={contact.event_id} />
+            ) : null}
+          </>
+        ) : (
+          <blockquote className="mt-3 rounded-lg border border-line bg-surface-raised/60 px-3.5 py-3 text-sm leading-relaxed text-ink">
+            {contact.body}
+          </blockquote>
+        )}
+
+        <dl className="mt-4 space-y-2.5 border-t border-line pt-4">
+          <Row label="Amount at risk" value={formatInr(contact.amount_at_risk)} />
+          <Row label="Prepared" value={formatDateTime(contact.created_at)} />
+          {contact.simulated_at ? (
+            <Row label="Demo sent" value={formatDateTime(contact.simulated_at)} />
+          ) : null}
+        </dl>
+
+        <div className="mt-3 rounded-lg bg-surface-raised/50 px-3 py-2">
+          <p className="text-micro uppercase text-ink-subtle">Next step</p>
+          <p className="mt-0.5 text-xs leading-relaxed text-ink-muted">
+            {communicationNextStep(
+              contact.status,
+              contact.customer_response,
+              contact.promise_id,
+            )}
+          </p>
+        </div>
+
+        <div className="mt-4 border-t border-line pt-4">
+          <Link
+            href={`/events/${contact.event_id}?from=communications`}
+            className="inline-flex items-center gap-1 text-xs text-accent outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            Open the recovery case
+            <ArrowRight className="h-3 w-3" aria-hidden="true" />
+          </Link>
+          {contact.promise_id ? (
+            <Link
+              href="/promises"
+              className="ml-4 inline-flex items-center gap-1 text-xs text-accent outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              View the promise
+              <ArrowRight className="h-3 w-3" aria-hidden="true" />
+            </Link>
+          ) : null}
+        </div>
+
+        {contact.status === 'prepared' ? (
+          <DemoBlock>
+            <Button size="sm" onClick={onSend} disabled={busy} className="w-full">
+              {busy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <Send className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+              Simulate sending
+            </Button>
+          </DemoBlock>
+        ) : null}
+
+        {contact.status === 'simulated' && !contact.customer_response ? (
+          <DemoBlock>
+            <p className="text-xs leading-relaxed text-ink-muted">
+              Represent how the customer replied.
+            </p>
+            <label className="mt-2 block">
+              <span className="text-micro uppercase text-ink-subtle">
+                If they promise to pay, by when?
+              </span>
+              <input
+                type="date"
+                value={date}
+                onChange={(event) => setDate(event.target.value)}
+                className="tabular mt-1.5 h-9 w-full rounded-lg border border-line bg-surface px-3 text-xs text-ink outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/30"
+              />
+            </label>
+            <div className="mt-2.5 flex flex-col gap-2">
+              <Button
+                size="sm"
+                disabled={busy}
+                onClick={() =>
+                  onRespond(
+                    {
+                      response: 'promised_to_pay',
+                      promised_date: new Date(`${date}T12:00:00`).toISOString(),
+                    },
+                    'Customer response simulated. A promise to pay was recorded.',
+                  )
+                }
+              >
+                &ldquo;I&rsquo;ll pay by this date&rdquo;
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={busy}
+                onClick={() =>
+                  onRespond({ response: 'no_response' }, 'Customer response simulated — no reply.')
+                }
+              >
+                No reply
+              </Button>
+            </div>
+          </DemoBlock>
+        ) : null}
+
+        {contact.customer_response ? (
+          <p className="mt-4 rounded-lg border border-accent/25 bg-accent/5 px-3 py-2 text-xs text-ink-muted">
+            {customerResponseLabel(contact.customer_response)}
+          </p>
+        ) : null}
+      </div>
+    </Card>
+  );
+}
+
+/** True when contact hours are the only thing standing in the way. */
+function blockedOnlyByHours(reason: string | null): boolean {
+  return Boolean(reason && reason.toLowerCase().includes('contact window'));
+}
+
+/**
+ * What this message would say during permitted hours.
+ *
+ * Explicitly a preview and explicitly not a contact. It reads through the
+ * existing preview endpoint, which evaluates the contact-hours rule against a
+ * fixed in-window instant and leaves every other compliance rule running for
+ * real — so a message refused for frequency or urgency stays refused here too.
+ */
+function BlockedPreview({ eventId }: { eventId: string }) {
+  const [preview, setPreview] = React.useState<ScriptResponse | null>(null);
+  const [loading, setLoading] = React.useState(false);
+
+  if (!preview) {
+    return (
+      <Button
+        variant="secondary"
+        size="sm"
+        className="mt-3 w-full"
+        disabled={loading}
+        onClick={() => {
+          setLoading(true);
+          api
+            .previewScript(eventId)
+            .then(setPreview)
+            .catch(() => undefined)
+            .finally(() => setLoading(false));
+        }}
+      >
+        {loading ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+        ) : (
+          <Eye className="h-3.5 w-3.5" aria-hidden="true" />
+        )}
+        Preview what Revora would say
+      </Button>
+    );
+  }
+
+  return (
+    <div className="mt-3 rounded-lg border-2 border-dashed border-accent/40 bg-accent/[0.03] p-3">
+      <p className="text-micro font-semibold uppercase tracking-wide text-accent">
+        Demo preview — not a live contact
+      </p>
+      {preview.compliant ? (
+        <blockquote className="mt-2 rounded-lg border border-accent/25 bg-surface px-3 py-2.5 text-xs leading-relaxed text-ink">
+          {preview.script}
+        </blockquote>
+      ) : (
+        <p className="mt-2 text-xs leading-relaxed text-ink-muted">
+          Contact hours were not the only problem — another check refused this message
+          too, so there is nothing to show.
+        </p>
+      )}
+      <p className="mt-2 text-micro leading-relaxed text-ink-subtle">
+        Nothing was sent and nothing was changed. This is what the message would say
+        during your permitted contact hours.
+      </p>
+    </div>
+  );
+}
+
+function DemoBlock({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mt-4 rounded-lg border border-line bg-surface-raised/50 p-3">
+      <p className="text-micro font-semibold uppercase text-ink-subtle">
+        Demo controls — simulation only
+      </p>
+      <div className="mt-2.5">{children}</div>
+    </div>
+  );
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <dt className="text-xs text-ink-subtle">{label}</dt>
+      <dd className="tabular text-xs font-medium text-ink">{value}</dd>
+    </div>
+  );
+}
+
+function PrepareContact({
+  busy,
+  onPrepare,
+}: {
+  busy: boolean;
+  onPrepare: (eventId: string, channel?: string) => void;
+}) {
+  const [cases, setCases] = React.useState<EventSummary[]>([]);
+  const [eventId, setEventId] = React.useState('');
+  const [channel, setChannel] = React.useState('email');
+
+  React.useEffect(() => {
+    api
+      .listEvents({ limit: 60 })
+      .then((body) =>
+        setCases(
+          body.items.filter(
+            (item) => item.status !== 'recovered' && item.status !== 'unrecoverable',
+          ),
+        ),
+      )
+      .catch(() => setCases([]));
+  }, []);
+
+  return (
+    <Card className="sticky top-24">
+      <CardHeader>
+        <CardTitle>Reach a customer</CardTitle>
+        <CardDescription>
+          Revora writes the message and checks it against your policy before anything
+          happens.
+        </CardDescription>
+      </CardHeader>
+
+      <div className="space-y-3 px-5 pb-5">
+        <label className="block">
+          <span className="text-micro uppercase text-ink-subtle">Recovery case</span>
+          <select
+            value={eventId}
+            onChange={(event) => setEventId(event.target.value)}
+            className="mt-1.5 h-9 w-full cursor-pointer rounded-lg border border-line bg-surface px-3 text-xs text-ink outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/30"
+          >
+            <option value="">Choose a customer…</option>
+            {cases.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.customer_name} — {formatInr(item.amount)} outstanding
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <fieldset>
+          <legend className="text-micro uppercase text-ink-subtle">How to reach them</legend>
+          <div role="radiogroup" aria-label="Channel" className="mt-1.5 flex gap-1.5">
+            {CHANNELS.filter((c) => c.value).map((option) => {
+              const Icon = option.icon;
+              const active = option.value === channel;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  onClick={() => setChannel(option.value)}
+                  className={cn(
+                    'flex flex-1 flex-col items-center gap-1 rounded-lg border px-2 py-2 text-micro transition-colors',
+                    'outline-none focus-visible:ring-2 focus-visible:ring-accent',
+                    active
+                      ? 'border-accent/40 bg-accent/[0.07] text-ink'
+                      : 'border-line text-ink-subtle hover:border-line-strong',
+                  )}
+                >
+                  <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+        </fieldset>
+
+        <Button
+          className="w-full"
+          disabled={!eventId || busy}
+          onClick={() => onPrepare(eventId, channel)}
+        >
+          {busy ? (
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+          ) : (
+            <Mail className="h-4 w-4" aria-hidden="true" />
+          )}
+          Prepare recovery message
+        </Button>
+
+        <p className="text-xs leading-relaxed text-ink-subtle">
+          Preparing a message contacts nobody. If your policy does not allow this contact,
+          Revora writes nothing and tells you why.
+        </p>
+      </div>
+    </Card>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+
+function ListSkeleton() {
+  return (
+    <Card className="p-4" role="status" aria-busy="true">
+      <span className="sr-only">Loading recovery messages</span>
+      <div className="space-y-4">
+        {[0, 1, 2, 3].map((index) => (
+          <div key={index} className="space-y-1.5">
+            <div className="flex items-center gap-3">
+              <div className="h-3.5 w-32 animate-pulse rounded bg-line/60" />
+              <div className="h-4 w-20 animate-pulse rounded-full bg-line/60" />
+              <div className="ml-auto h-3.5 w-24 animate-pulse rounded bg-line/60" />
+            </div>
+            <div className="h-3 w-56 animate-pulse rounded bg-line/60" />
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function EmptyState() {
+  return (
+    <Card className="flex flex-col items-center px-6 py-16 text-center">
+      <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-line bg-surface-raised">
+        <Mail className="h-5 w-5 text-ink-subtle" aria-hidden="true" />
+      </span>
+      <h2 className="mt-4 text-base font-semibold text-ink">No recovery messages yet</h2>
+      <p className="mt-2 max-w-md text-sm leading-relaxed text-ink-muted">
+        When Revora decides a customer should be contacted, the message it would send
+        appears here — along with whether your policy allows it.
+      </p>
+    </Card>
+  );
+}
+
+function ErrorState({ onRetry, busy }: { onRetry: () => void; busy: boolean }) {
+  return (
+    <Card className="border-unrecoverable/25">
+      <div className="flex flex-col gap-4 p-6 sm:flex-row sm:items-start">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-unrecoverable/10 ring-1 ring-unrecoverable/20">
+          <AlertCircle className="h-5 w-5 text-unrecoverable" aria-hidden="true" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-sm font-semibold text-ink">
+            Recovery messages could not be loaded
+          </h2>
+          <p className="mt-1.5 text-sm leading-relaxed text-ink-muted">
+            Nothing was changed and nothing was sent. This was a problem reading your
+            messages.
+          </p>
+          <Button variant="secondary" size="sm" className="mt-4" onClick={onRetry} disabled={busy}>
+            {busy ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+            ) : (
+              <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+            )}
+            Try again
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
+}

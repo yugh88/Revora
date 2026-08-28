@@ -14,7 +14,8 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 
-import { formatDateTime, formatRelative, humanizeKey } from '../lib/api-client';
+import { formatDateTime, formatRelative } from '../lib/api-client';
+import { auditActionLabel, stageLabel, stageMeaning } from '../lib/labels';
 import { PIPELINE_STAGES, type AuditEntry, type PipelineStage } from '../lib/types';
 import { Card, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { cn } from './ui/utils';
@@ -126,11 +127,9 @@ export function AuditTimeline({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Audit trail</CardTitle>
+        <CardTitle>What happened, step by step</CardTitle>
         <CardDescription>
-          Immutable, append-only. {entries.length}{' '}
-          {entries.length === 1 ? 'entry' : 'entries'} recorded across{' '}
-          {stagesPresent.length} of {PIPELINE_STAGES.length} stages.
+          Every action Revora took on this case, in order and never edited.
         </CardDescription>
       </CardHeader>
 
@@ -184,7 +183,7 @@ export function AuditTimeline({
                     {reached ? (
                       <span className="tabular text-micro text-ink-subtle">
                         {stageEntries.length}{' '}
-                        {stageEntries.length === 1 ? 'entry' : 'entries'}
+                        {stageEntries.length === 1 ? 'step' : 'steps'}
                       </span>
                     ) : null}
                   </div>
@@ -194,16 +193,23 @@ export function AuditTimeline({
                       {absenceReason(stage, lastReached, reachedRecovery, reachedEscalation)}
                     </p>
                   ) : (
-                    <ul className="mt-2 space-y-2">
-                      {stageEntries.map((entry) => (
-                        <li
-                          key={entry.id}
-                          className="rounded-lg border border-line bg-surface-raised/60 p-2.5"
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-                            <code className="text-micro font-semibold text-ink">
-                              {humanizeKey(entry.action)}
-                            </code>
+                    <>
+                      {/* The stage's meaning in plain language. The engine's own
+                          per-step reasoning is precise and technical — it names
+                          rule identifiers and internal codes — so it stays in
+                          the audit record rather than on a merchant's screen. */}
+                      <p className="mt-1 text-xs leading-relaxed text-ink-muted">
+                        {stageMeaning(stage)}
+                      </p>
+                      <ul className="mt-2 space-y-1.5">
+                        {stageEntries.map((entry) => (
+                          <li
+                            key={entry.id}
+                            className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-lg border border-line bg-surface-raised/60 px-2.5 py-1.5"
+                          >
+                            <span className="text-micro text-ink">
+                              {auditActionLabel(entry.action)}
+                            </span>
                             <time
                               dateTime={entry.timestamp}
                               title={formatDateTime(entry.timestamp)}
@@ -211,28 +217,10 @@ export function AuditTimeline({
                             >
                               {formatRelative(entry.timestamp)}
                             </time>
-                          </div>
-
-                          {entry.before_state !== null || entry.after_state !== null ? (
-                            <p className="tabular mt-1.5 flex flex-wrap items-center gap-1.5 text-micro text-ink-muted">
-                              <span className="rounded bg-line/60 px-1.5 py-0.5">
-                                {String(entry.before_state ?? '—')}
-                              </span>
-                              <span aria-hidden="true">→</span>
-                              <span className="rounded bg-accent/10 px-1.5 py-0.5 text-accent">
-                                {String(entry.after_state ?? '—')}
-                              </span>
-                            </p>
-                          ) : null}
-
-                          {entry.reasoning ? (
-                            <p className="mt-1.5 text-xs leading-relaxed text-ink-muted">
-                              {entry.reasoning}
-                            </p>
-                          ) : null}
-                        </li>
-                      ))}
-                    </ul>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
                   )}
                 </div>
               </li>

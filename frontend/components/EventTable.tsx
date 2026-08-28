@@ -4,8 +4,9 @@ import * as React from 'react';
 import Link from 'next/link';
 import { AlertTriangle, ChevronRight } from 'lucide-react';
 
-import { formatDateTime, formatInr, formatInrExact, formatRelative, humanizeKey } from '../lib/api-client';
-import { EVENT_TYPE_LABELS, type EventSummary } from '../lib/types';
+import { formatDateTime, formatInr, formatInrExact, formatRelative } from '../lib/api-client';
+import { actionLabel, eventTypeLabel, reviewReasonLabel, rootCauseLabel } from '../lib/labels';
+import type { EventSummary } from '../lib/types';
 import { StatusBadge, StatusDot } from './StatusBadge';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { cn } from './ui/utils';
@@ -31,7 +32,7 @@ function NeedsReviewFlag({ reasons }: { reasons: string[] }) {
         <span
           tabIndex={0}
           className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-pending/10 text-pending outline-none ring-1 ring-pending/20 focus-visible:ring-2 focus-visible:ring-accent"
-          aria-label={`Needs review: ${reasons.join('; ')}`}
+          aria-label={`Needs review: ${reasons.map(reviewReasonLabel).join('; ')}`}
         >
           <AlertTriangle className="h-3 w-3" aria-hidden="true" />
         </span>
@@ -41,7 +42,7 @@ function NeedsReviewFlag({ reasons }: { reasons: string[] }) {
         <ul className="mt-1 space-y-0.5">
           {reasons.map((reason) => (
             <li key={reason} className="text-ink-muted">
-              {reason}
+              {reviewReasonLabel(reason)}
             </li>
           ))}
         </ul>
@@ -54,55 +55,70 @@ function RootCauseCell({ event }: { event: EventSummary }) {
   if (!event.root_cause) {
     return <span className="text-xs text-ink-subtle">—</span>;
   }
-  const low = event.confidence !== null && event.confidence < 0.6;
+  // A confidence percentage is an implementation detail a merchant cannot act
+  // on. What they need to know is whether a person should look at it.
+  const needsReview = event.confidence !== null && event.confidence < 0.6;
   return (
-    <span className="flex items-center gap-1.5">
-      <span className="truncate text-xs text-ink">{humanizeKey(event.root_cause)}</span>
-      {event.confidence !== null ? (
+    <span className="flex flex-wrap items-center gap-1.5">
+      <span className="text-xs text-ink">{rootCauseLabel(event.root_cause)}</span>
+      {needsReview ? (
         <span
-          className={cn(
-            'tabular shrink-0 rounded px-1 py-0.5 text-micro font-medium',
-            low ? 'bg-pending/10 text-pending' : 'bg-surface-raised text-ink-subtle',
-          )}
-          title={low ? 'Below the engine confidence threshold' : undefined}
+          className="shrink-0 rounded bg-pending/10 px-1.5 py-0.5 text-micro font-medium text-pending"
+          title="Revora could not determine this confidently, so it did not act automatically"
         >
-          {(event.confidence * 100).toFixed(0)}%
+          Needs review
         </span>
       ) : null}
     </span>
   );
 }
 
+/**
+ * Column widths are declared rather than left to the browser.
+ *
+ * Auto-layout gave Customer and Issue whatever space was left after the wide
+ * columns took theirs, which is how names ended up clipped and headings
+ * collided. Fixed minimums plus horizontal overflow is the honest trade: a
+ * name is either readable or it is not, and squeezing it to fit helps nobody.
+ */
+const COLUMNS: Array<{
+  key: string;
+  label: string;
+  width: string;
+  align?: 'right';
+}> = [
+  { key: 'customer', label: 'Customer', width: 'min-w-[190px]' },
+  { key: 'issue', label: 'Issue', width: 'min-w-[170px]' },
+  { key: 'amount', label: 'Amount', width: 'min-w-[110px]', align: 'right' },
+  { key: 'status', label: 'Status', width: 'min-w-[130px]' },
+  { key: 'reason', label: 'Reason', width: 'min-w-[210px]' },
+  { key: 'action', label: 'Recovery action', width: 'min-w-[190px]' },
+  { key: 'detected', label: 'Detected', width: 'min-w-[120px]' },
+  { key: 'chevron', label: '', width: 'w-10' },
+];
+
 export function EventTable({ events }: { events: EventSummary[] }) {
   return (
     <>
       {/* ---------------- Desktop: real table ---------------- */}
       <div className="hidden overflow-x-auto lg:block">
-        <table className="w-full border-collapse text-left">
+        <table className="w-full min-w-[1080px] border-collapse text-left">
           <caption className="sr-only">
-            Revenue-risk events. Each row links to the full drill-down.
+            Revenue at risk. Each row opens the full recovery story.
           </caption>
           <thead>
             <tr className="border-b border-line">
-              {[
-                'Event',
-                'Type',
-                'Amount',
-                'Status',
-                'Root cause',
-                'Action',
-                'Detected',
-                '',
-              ].map((heading, index) => (
+              {COLUMNS.map((column) => (
                 <th
-                  key={heading || index}
+                  key={column.label || column.key}
                   scope="col"
                   className={cn(
-                    'sticky top-16 z-10 bg-bg/95 px-3 py-2.5 text-micro font-semibold uppercase text-ink-subtle backdrop-blur',
-                    heading === 'Amount' && 'text-right',
+                    'sticky top-16 z-10 whitespace-nowrap bg-bg/95 px-4 py-2.5 text-micro font-semibold uppercase text-ink-subtle backdrop-blur',
+                    column.align === 'right' && 'text-right',
+                    column.width,
                   )}
                 >
-                  {heading}
+                  {column.label}
                 </th>
               ))}
             </tr>
@@ -113,58 +129,55 @@ export function EventTable({ events }: { events: EventSummary[] }) {
                 key={event.id}
                 className="group border-b border-line/70 transition-colors last:border-0 hover:bg-surface-raised/70 focus-within:bg-surface-raised/70"
               >
-                <td className="px-3 py-2.5">
+                <td className="px-4 py-3">
                   <div className="flex items-center gap-2">
                     <NeedsReviewFlag reasons={event.review_reasons} />
                     <Link
-                      href={`/events/${event.id}`}
+                      href={`/events/${event.id}?from=events`}
                       className="rounded outline-none focus-visible:ring-2 focus-visible:ring-accent"
                     >
-                      <code className="text-xs font-medium text-ink group-hover:text-accent">
-                        {event.id}
-                      </code>
-                      <span className="block text-micro text-ink-subtle">
-                        {event.customer_id}
+                      <span className="whitespace-nowrap text-xs font-medium text-ink group-hover:text-accent">
+                        {event.customer_name}
                       </span>
                     </Link>
                   </div>
                 </td>
-                <td className="px-3 py-2.5">
-                  <span className="text-xs text-ink-muted">
-                    {EVENT_TYPE_LABELS[event.type] ?? humanizeKey(event.type)}
+                <td className="px-4 py-3">
+                  <span className="whitespace-nowrap text-xs text-ink-muted">
+                    {eventTypeLabel(event.type)}
                   </span>
                 </td>
                 <td
-                  className="tabular px-3 py-2.5 text-right text-xs font-semibold text-ink"
+                  className="tabular whitespace-nowrap px-4 py-3 text-right text-xs font-semibold text-ink"
                   title={formatInrExact(event.amount)}
                 >
                   {formatInr(event.amount)}
                 </td>
-                <td className="px-3 py-2.5">
+                <td className="px-4 py-3">
                   <StatusDot status={event.status} />
                 </td>
-                <td className="max-w-[200px] px-3 py-2.5">
+                <td className="px-4 py-3">
                   <RootCauseCell event={event} />
                 </td>
-                <td className="px-3 py-2.5">
+                <td className="px-4 py-3">
                   {event.action_code ? (
                     <span className="text-xs text-ink-muted">
-                      {humanizeKey(event.action_code)}
+                      {actionLabel(event.action_code)}
                     </span>
                   ) : (
                     <span className="text-xs text-ink-subtle">—</span>
                   )}
                 </td>
-                <td className="px-3 py-2.5">
+                <td className="px-4 py-3">
                   <time
                     dateTime={event.detected_at}
                     title={formatDateTime(event.detected_at)}
-                    className="text-xs text-ink-subtle"
+                    className="whitespace-nowrap text-xs text-ink-subtle"
                   >
                     {formatRelative(event.detected_at)}
                   </time>
                 </td>
-                <td className="px-3 py-2.5 text-right">
+                <td className="px-4 py-3 text-right">
                   <ChevronRight
                     className="ml-auto h-4 w-4 text-ink-subtle/50 transition-transform group-hover:translate-x-0.5 group-hover:text-accent"
                     aria-hidden="true"
@@ -181,18 +194,19 @@ export function EventTable({ events }: { events: EventSummary[] }) {
         {events.map((event) => (
           <li key={event.id}>
             <Link
-              href={`/events/${event.id}`}
+              href={`/events/${event.id}?from=events`}
               className="block px-1 py-3 outline-none transition-colors hover:bg-surface-raised/70 focus-visible:bg-surface-raised/70"
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <NeedsReviewFlag reasons={event.review_reasons} />
-                    <code className="truncate text-xs font-medium text-ink">{event.id}</code>
+                    <span className="truncate text-xs font-medium text-ink">
+                      {event.customer_name}
+                    </span>
                   </div>
                   <p className="mt-0.5 text-micro text-ink-subtle">
-                    {EVENT_TYPE_LABELS[event.type] ?? humanizeKey(event.type)} ·{' '}
-                    {event.customer_id}
+                    {eventTypeLabel(event.type)}
                   </p>
                 </div>
                 <span
@@ -207,7 +221,7 @@ export function EventTable({ events }: { events: EventSummary[] }) {
                 <StatusBadge status={event.status} />
                 {event.root_cause ? (
                   <span className="text-micro text-ink-muted">
-                    {humanizeKey(event.root_cause)}
+                    {rootCauseLabel(event.root_cause)}
                   </span>
                 ) : null}
                 <time

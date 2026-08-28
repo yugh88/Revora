@@ -29,8 +29,10 @@ from app.database import init_db
 from app.routers import audit as audit_router
 from app.routers import batch as batch_router
 from app.routers import events as events_router
+from app.routers import communications as communications_router
 from app.routers import exceptions as exceptions_router
 from app.routers import policies as policies_router
+from app.routers import promises as promises_router
 from app.routers import scripts as scripts_router
 from app.services.logging_config import (
     configure_logging,
@@ -116,4 +118,6 @@ app.include_router(batch_router.router)
 app.include_router(exceptions_router.router)
 app.include_router(audit_router.router)
 app.include_router(policies_router.router)
+app.include_router(promises_router.router)
+app.include_router(communications_router.router)
 app.include_router(scripts_router.router)

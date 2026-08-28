@@ -48,11 +48,12 @@ import hashlib
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+import json
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Iterable
 
-from fastapi import APIRouter, Depends, HTTPException, status as http_status
+from fastapi import APIRouter, Depends, HTTPException, Query, status as http_status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -82,6 +83,7 @@ from app.gateways.base import PaymentGateway, RetryRequest
 from app.gateways.local_simulation import LocalSimulationGateway
 from app.ml.diagnosis_classifier import load_classifier
 from app.models import (
+    RecoveryRun,
     AuditLog,
     CustomerProfile,
     Decision,
@@ -94,6 +96,9 @@ from app.models import (
     StoppingRuleState,
 )
 from app.schemas.batch import (
+    RunDetailResponse,
+    RunListResponse,
+    RunSummary,
     BatchMoney,
     BatchRequest,
     BatchResponse,
@@ -198,6 +203,80 @@ def _simulate_contact_response(
 # --------------------------------------------------------------------------- #
 # Gateway selection
 # --------------------------------------------------------------------------- #
+
+
+#: Run names are dated in IST — the merchant's own day, not the server's.
+IST_FOR_NAMES = timezone(timedelta(hours=5, minutes=30), "IST")
+
+
+def _run_display_name(session: Session, finished_at: datetime) -> str:
+    """A merchant-readable name, generated once and stored.
+
+    Stored rather than derived on read, so the name a merchant saw when the run
+    finished is the name they see when they come back to it. A name computed
+    from "now" would silently change as the clock moved.
+    """
+    completed = int(
+        session.execute(select(func.count(RecoveryRun.id))).scalar_one() or 0
+    )
+    local = finished_at.astimezone(IST_FOR_NAMES)
+    day = local.strftime("%-d %b") if hasattr(local, "strftime") else ""
+    if completed == 0 and local.hour < 12:
+        return f"Morning Recovery Run — {day}"
+    return f"Recovery Run #{completed + 1} — {day}"
+
+
+def record_run(session: Session, response: BatchResponse) -> RecoveryRun:
+    """Persist what a completed run reported.
+
+    Called once, after the batch has finished and its metrics have been read
+    back out of the ledger. Nothing here computes money: every figure is copied
+    from the response the pipeline already produced, which is what makes this a
+    snapshot rather than a rival calculation.
+    """
+    finished = datetime.fromisoformat(response.finished_at)
+    run = RecoveryRun(
+        id=response.batch_id,
+        name=_run_display_name(session, finished),
+        started_at=datetime.fromisoformat(response.started_at),
+        finished_at=finished,
+        duration_seconds=response.duration_seconds,
+        gateway=response.gateway,
+        seed=response.seed,
+        total_records=response.total_records,
+        processed=response.processed,
+        isolated_failures=response.isolated_failures,
+        skipped_duplicates=response.skipped_duplicates,
+        amount_at_risk=Decimal(response.money.amount_at_risk),
+        amount_recovered=Decimal(response.money.amount_recovered),
+        amount_pending=Decimal(response.money.amount_pending),
+        amount_lost=Decimal(response.money.amount_lost),
+        recovery_rate=response.recovery_rate,
+        recovered_count=response.status_breakdown.get(EventStatus.RECOVERED, 0),
+        escalated_count=response.status_breakdown.get(EventStatus.ESCALATED, 0),
+        snapshot=json.loads(response.model_dump_json()),
+    )
+    session.add(run)
+    session.commit()
+    return run
+
+
+def _run_summary(run: RecoveryRun) -> RunSummary:
+    return RunSummary(
+        id=run.id,
+        name=run.name,
+        finished_at=run.finished_at.isoformat(),
+        gateway=run.gateway,
+        total_records=run.total_records,
+        processed=run.processed,
+        amount_at_risk=str(run.amount_at_risk),
+        amount_recovered=str(run.amount_recovered),
+        amount_pending=str(run.amount_pending),
+        amount_lost=str(run.amount_lost),
+        recovery_rate=run.recovery_rate,
+        recovered_count=run.recovered_count,
+        escalated_count=run.escalated_count,
+    )
 
 
 def build_gateway(gateway: GatewayUsed, seed: int = 42) -> PaymentGateway:
@@ -1320,5 +1399,54 @@ def post_batch(
 
     Defaults to 50 records on the built-in simulator, which needs no
     credentials and is the path that must never fail during judging.
+
+    The completed result is recorded so it can be reopened later without
+    re-running the analysis.
     """
-    return run_batch(session, request or BatchRequest())
+    response = run_batch(session, request or BatchRequest())
+    try:
+        record_run(session, response)
+    except Exception:  # noqa: BLE001
+        # History is a convenience; the run itself already succeeded and its
+        # events are in the ledger. Failing the whole request because the
+        # bookkeeping entry could not be written would throw away real work.
+        logger.exception(
+            "run_history_write_failed",
+            extra={"stage": "batch", "action": "record_run", "outcome": "error"},
+        )
+    return response
+
+
+@router.get("/batch/runs", response_model=RunListResponse, summary="Completed recovery runs")
+def list_runs(
+    limit: int = Query(default=20, ge=1, le=100), session: Session = Depends(get_db)
+) -> RunListResponse:
+    """Recent completed runs, newest first. Read-only."""
+    total = int(session.execute(select(func.count(RecoveryRun.id))).scalar_one() or 0)
+    rows = list(
+        session.execute(
+            select(RecoveryRun).order_by(RecoveryRun.finished_at.desc()).limit(limit)
+        ).scalars()
+    )
+    return RunListResponse(total=total, items=[_run_summary(row) for row in rows])
+
+
+@router.get(
+    "/batch/runs/{run_id}",
+    response_model=RunDetailResponse,
+    summary="Reopen one completed recovery run",
+)
+def get_run(run_id: str, session: Session = Depends(get_db)) -> RunDetailResponse:
+    """The exact result that run reported when it finished.
+
+    Returned from the stored snapshot rather than recomputed, so a past run
+    always shows what the merchant actually saw — recomputing would quietly
+    rewrite history if the ledger moved on.
+    """
+    run = session.get(RecoveryRun, run_id)
+    if run is None:
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail="That recovery run is no longer available.",
+        )
+    return RunDetailResponse(run=_run_summary(run), snapshot=run.snapshot or {})

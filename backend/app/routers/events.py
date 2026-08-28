@@ -22,6 +22,7 @@ of truth for what "status=stopped" means.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -83,6 +84,15 @@ PIPELINE_STAGES: tuple[AuditStage, ...] = (
 )
 
 
+def _as_utc(moment: datetime) -> datetime:
+    """Attach UTC to a naive bound so a query filter cannot raise.
+
+    Callers legitimately send either form: a browser's toISOString() always
+    carries a zone, a hand-written curl often does not.
+    """
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
+
+
 def _latest_decision(session: Session, event_id: str) -> Decision | None:
     return session.execute(
         select(Decision)
@@ -125,11 +135,18 @@ def build_summary(
     if decision is not None and isinstance(decision.policy_result, dict):
         policy_status = decision.policy_result.get('status')
 
+    raw = event.raw_signal if isinstance(event.raw_signal, dict) else {}
+    customer_name = raw.get('customer_name')
+
     return EventSummary(
         id=event.id,
         type=event.type,
         merchant_id=event.merchant_id,
         customer_id=event.customer_id,
+        customer_name=(
+            str(customer_name) if isinstance(customer_name, str) and customer_name
+            else event.customer_id
+        ),
         amount=str(event.amount),
         currency=event.currency,
         source_ref=event.source_ref,
@@ -187,11 +204,33 @@ def _money_summary(session: Session, scoped, status_breakdown: dict[str, int]) -
         )
         return _sum_money(session, RiskEvent.amount, RiskEvent.id.in_(ids))
 
+    def partly_outstanding() -> Decimal:
+        """The unpaid remainder of cases that were only partly settled.
+
+        A customer who owed 100 and paid 30 leaves 70 outstanding. Without this
+        the 70 belongs to no bucket at all: it is not recovered, it is not
+        written off, and its case is not marked pending — so the three amounts
+        stop summing to the amount at risk and money quietly leaves the books.
+        """
+        total = Decimal("0.00")
+        rows = session.execute(
+            select(RiskEvent.amount, OutcomeModel.amount_recovered)
+            .join(OutcomeModel, OutcomeModel.event_id == RiskEvent.id)
+            .where(
+                RiskEvent.id.in_(scoped_ids),
+                OutcomeModel.resolved == OutcomeResolution.PARTIALLY_RECOVERED,
+            )
+        )
+        for at_risk, recovered_part in rows:
+            if at_risk is not None:
+                total += at_risk - (recovered_part or Decimal("0.00"))
+        return total.quantize(Decimal("0.01"))
+
     return EventMoneySummary(
         amount_at_risk=str(at_risk),
         amount_recovered=str(recovered),
         amount_lost=str(amount_where(OutcomeResolution.LOST)),
-        amount_pending=str(amount_where(OutcomeResolution.PENDING)),
+        amount_pending=str(amount_where(OutcomeResolution.PENDING) + partly_outstanding()),
         recovery_rate=round(float(recovered / at_risk), 4) if at_risk > 0 else 0.0,
         active_interventions=(
             status_breakdown.get(EventStatus.INTERVENING.value, 0)
@@ -213,6 +252,13 @@ def list_events(
         default=None,
         description='Substring match on event id, source reference, customer id or correlation id.',
     ),
+    detected_from: datetime | None = Query(
+        default=None,
+        description='Only events detected at or after this instant. Drives the reporting-period selector.',
+    ),
+    detected_to: datetime | None = Query(
+        default=None, description='Only events detected at or before this instant.'
+    ),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     order: str = Query(default='desc', pattern='^(asc|desc)$'),
@@ -230,6 +276,15 @@ def list_events(
         conditions.append(RiskEvent.type == type)
     if gateway is not None:
         conditions.append(RiskEvent.gateway_used == gateway)
+    # A naive bound is interpreted as UTC rather than rejected. The TZDateTime
+    # guard that refuses naive values on WRITE is a real safety property and
+    # stays exactly as it is — but a read filter is not a write, and letting an
+    # ordinary query parameter raise a 500 would surface a backend exception to
+    # a user who can do nothing about it.
+    if detected_from is not None:
+        conditions.append(RiskEvent.detected_at >= _as_utc(detected_from))
+    if detected_to is not None:
+        conditions.append(RiskEvent.detected_at <= _as_utc(detected_to))
     if q:
         needle = f'%{q.strip()}%'
         conditions.append(
@@ -322,6 +377,13 @@ def list_events(
 
     money = _money_summary(session, scoped, status_breakdown)
 
+    # Deliberately UNFILTERED: this reports how much history exists at all, so
+    # the UI can distinguish "no recoveries in the last 12 months" from "we have
+    # only ever recorded 6 weeks".
+    earliest = session.execute(
+        select(RiskEvent.detected_at).order_by(RiskEvent.detected_at.asc()).limit(1)
+    ).scalar_one_or_none()
+
     return EventListResponse(
         total=total,
         returned=len(items),
@@ -331,6 +393,7 @@ def list_events(
         type_breakdown=type_breakdown,
         needs_review_count=needs_review_count,
         money=money,
+        earliest_detected_at=earliest.isoformat() if earliest is not None else None,
         items=items,
     )
 

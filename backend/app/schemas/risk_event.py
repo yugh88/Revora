@@ -34,6 +34,10 @@ class EventSummary(BaseModel):
     type: EventType
     merchant_id: str
     customer_id: str
+    #: The customer's name as it arrived on the inbound signal. The merchant UI
+    #: shows people, not identifiers — "Aditya Desai", never "cust_0011".
+    #: Falls back to the id only when the signal carried no name.
+    customer_name: str
     amount: str
     currency: str
     source_ref: str | None
@@ -95,6 +99,10 @@ class EventListResponse(BaseModel):
     type_breakdown: dict[str, int]
     needs_review_count: int
     money: EventMoneySummary
+    #: Oldest detection time in the WHOLE ledger, ignoring filters. Lets the UI
+    #: say "only N months of history are available" honestly instead of drawing
+    #: an empty twelve-month chart.
+    earliest_detected_at: str | None = None
     items: list[EventSummary]
 
 

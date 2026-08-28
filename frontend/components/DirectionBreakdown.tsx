@@ -12,13 +12,8 @@ import {
 } from 'lucide-react';
 
 import { formatCount } from '../lib/api-client';
-import {
-  EVENT_TYPES,
-  EVENT_TYPE_HINTS,
-  EVENT_TYPE_LABELS,
-  type BatchResponse,
-  type EventType,
-} from '../lib/types';
+import { eventTypeLabel, EVENT_TYPE_HINT } from '../lib/labels';
+import { EVENT_TYPES, type BatchResponse, type EventType } from '../lib/types';
 import { Card, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { cn } from './ui/utils';
@@ -77,8 +72,8 @@ export function DirectionBreakdown({ result }: { result: BatchResponse | null })
       const count = breakdown[type] ?? 0;
       return {
         type,
-        label: EVENT_TYPE_LABELS[type],
-        hint: EVENT_TYPE_HINTS[type],
+        label: eventTypeLabel(type),
+        hint: EVENT_TYPE_HINT[type],
         count,
         share: total > 0 ? count / total : 0,
         icon: DIRECTION_ICON[type],
@@ -93,8 +88,8 @@ export function DirectionBreakdown({ result }: { result: BatchResponse | null })
       <CardHeader>
         <div className="flex items-start justify-between gap-4">
           <div>
-            <CardTitle>Recovery directions</CardTitle>
-            <CardDescription>Events processed across the five core types.</CardDescription>
+            <CardTitle>Where revenue is at risk</CardTitle>
+            <CardDescription>Across the five recovery directions.</CardDescription>
           </div>
           {total > 0 ? (
             <span className="tabular shrink-0 text-micro uppercase text-ink-subtle">

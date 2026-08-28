@@ -4,7 +4,8 @@ import * as React from 'react';
 import { Check, Loader2, RotateCcw, Save } from 'lucide-react';
 
 import { formatDateTime, formatInrExact } from '../lib/api-client';
-import { EVENT_TYPE_LABELS, type PolicyOut, type PolicyUpdate } from '../lib/types';
+import { eventTypeLabel } from '../lib/labels';
+import type { PolicyOut, PolicyUpdate } from '../lib/types';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Card, CardDescription, CardHeader, CardTitle } from './ui/card';
@@ -160,7 +161,7 @@ export function PolicyForm({
       <CardHeader>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <CardTitle>{EVENT_TYPE_LABELS[policy.event_type]}</CardTitle>
+            <CardTitle>{eventTypeLabel(policy.event_type)}</CardTitle>
             <CardDescription>
               {policy.is_default
                 ? 'Engine defaults — nothing saved for this event type yet.'

@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   AlertCircle,
@@ -11,6 +12,7 @@ import {
   Database,
   Loader2,
   Play,
+  Clock,
   RotateCcw,
   Target,
   TrendingUp,
@@ -22,19 +24,20 @@ import { KpiCard } from '../../components/KpiCard';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Card, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
-import { SiteHeader } from '../../components/ui/site-header';
+import { AppShell } from '../../components/ui/site-header';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip';
 import { cn } from '../../components/ui/utils';
 import {
   api,
   ApiError,
   formatCount,
+  formatDateTime,
   formatInr,
   formatInrExact,
   formatPercent,
-  humanizeKey,
 } from '../../lib/api-client';
-import type { BatchResponse, GatewayUsed } from '../../lib/types';
+import { gatewayLabel, stopReasonLabel } from '../../lib/labels';
+import type { BatchResponse, GatewayUsed, RunSummary } from '../../lib/types';
 
 /**
  * Recovery analysis console. BUILD_SPEC Section 13, page 3.
@@ -53,8 +56,38 @@ import type { BatchResponse, GatewayUsed } from '../../lib/types';
 const SIZES = [50, 500] as const;
 type RunSize = (typeof SIZES)[number];
 
+/**
+ * A merchant-readable name for a run.
+ *
+ * The engine identifies runs by an opaque batch id; a merchant should not have
+ * to read one. The number is the count of runs in this session, and the date
+ * makes it locatable in conversation ("the payment recovery we ran on the 27th").
+ */
+function runName(index: number, at: Date): string {
+  const day = at.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+  const hour = at.getHours();
+  if (index === 1 && hour < 12) return `Morning Recovery Run — ${day}`;
+  return `Recovery Run #${index} — ${day}`;
+}
+
 export default function BatchPage() {
+  return (
+    <React.Suspense fallback={null}>
+      <RunRecovery />
+    </React.Suspense>
+  );
+}
+
+function RunRecovery() {
   const [size, setSize] = React.useState<RunSize>(50);
+  const [runLabel, setRunLabel] = React.useState<string | null>(null);
+  const [history, setHistory] = React.useState<RunSummary[]>([]);
+
+  // Reopening is driven by the URL, so a run can be linked to and the browser
+  // back button behaves. The identifier lives in the address bar only — it is
+  // never rendered as page content.
+  const searchParams = useSearchParams();
+  const openRunId = searchParams.get('run');
   const [gateway, setGateway] = React.useState<GatewayUsed>('local_simulation');
   const [running, setRunning] = React.useState(false);
   const [result, setResult] = React.useState<BatchResponse | null>(null);
@@ -63,6 +96,46 @@ export default function BatchPage() {
 
   // A live counter during the run. A 500-record batch takes ~25s and a static
   // spinner for that long is indistinguishable from a hang.
+  // Load history on mount so a merchant returning to the page sees earlier
+  // runs without having to run anything.
+  const loadHistory = React.useCallback(async () => {
+    try {
+      setHistory((await api.listRuns()).items);
+    } catch {
+      // History is a convenience; its absence must not break the page.
+    }
+  }, []);
+
+  React.useEffect(() => {
+    void loadHistory();
+  }, [loadHistory]);
+
+  // Reopen a stored run when the URL names one.
+  React.useEffect(() => {
+    if (!openRunId) return;
+    let cancelled = false;
+    api
+      .getRun(openRunId)
+      .then((detail) => {
+        if (cancelled) return;
+        setResult(detail.snapshot);
+        setRunLabel(detail.run.name);
+        setError(null);
+      })
+      .catch((caught) => {
+        if (!cancelled) {
+          setError(
+            caught instanceof ApiError
+              ? caught
+              : new ApiError('That recovery run could not be opened.'),
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [openRunId]);
+
   React.useEffect(() => {
     if (!running) return;
     setElapsed(0);
@@ -78,7 +151,13 @@ export default function BatchPage() {
     setRunning(true);
     setError(null);
     try {
-      setResult(await api.runBatch({ count: size, gateway }));
+      const response = await api.runBatch({ count: size, gateway });
+      setResult(response);
+      // The backend names and stores the run; read it back rather than
+      // inventing a second name here that could disagree with history.
+      const runs = await api.listRuns();
+      setHistory(runs.items);
+      setRunLabel(runs.items.find((r) => r.id === response.batch_id)?.name ?? null);
     } catch (caught) {
       setError(
         caught instanceof ApiError
@@ -91,17 +170,16 @@ export default function BatchPage() {
   }, [running, size, gateway]);
 
   return (
-    <div className="min-h-screen">
-      <SiteHeader />
+    <AppShell>
 
       <main className="mx-auto max-w-[1400px] px-4 py-8 sm:px-6 lg:px-8">
         <div className="animate-fade-up">
           <h1 className="text-2xl font-semibold tracking-tight text-ink">
-            Recovery analysis
+            Run recovery analysis
           </h1>
           <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-ink-muted">
-            Push a batch of synthetic revenue-risk records through the full engine and
-            measure what actually came back.
+            Revora reviews a set of at-risk payments, decides what to do about each one
+            within your limits, acts, and verifies the result.
           </p>
         </div>
 
@@ -110,20 +188,20 @@ export default function BatchPage() {
           <div className="animate-fade-up stagger-1 lg:col-span-1">
             <Card className="sticky top-24">
               <CardHeader>
-                <CardTitle>Configuration</CardTitle>
+                <CardTitle>Recovery settings</CardTitle>
                 <CardDescription>
-                  Choose the volume and which gateway executes.
+                  Choose how many cases to work and where recovery runs.
                 </CardDescription>
               </CardHeader>
 
               <div className="space-y-5 px-5 pb-5">
                 <fieldset disabled={running}>
                   <legend className="text-micro font-semibold uppercase text-ink-subtle">
-                    Records
+                    Cases to review
                   </legend>
                   <div
                     role="radiogroup"
-                    aria-label="Records per analysis"
+                    aria-label="Cases per analysis"
                     className="mt-2.5 flex gap-2"
                   >
                     {SIZES.map((option) => (
@@ -158,18 +236,18 @@ export default function BatchPage() {
                 <div className="rounded-lg border border-line bg-surface-raised/50 px-3 py-2.5">
                   <p className="flex items-center gap-1.5 text-micro font-semibold uppercase text-ink-subtle">
                     <Database className="h-3 w-3" aria-hidden="true" />
-                    This writes state
+                    What happens
                   </p>
                   <p className="mt-1.5 text-xs leading-relaxed text-ink-muted">
-                    {size} synthetic records will be detected, diagnosed, scored, gated by
-                    policy and executed via the{' '}
-                    <span className="font-medium text-ink">
-                      {gateway === 'local_simulation'
-                        ? 'built-in simulator'
-                        : 'Razorpay test sandbox'}
-                    </span>
-                    . Events, decisions, ledger rows and audit entries are all persisted —
-                    they will appear in the events feed afterwards.
+                    Revora will review {size} at-risk cases, work out why each one failed,
+                    choose a recovery action within your policy limits, and verify what
+                    happened. The results are saved and will appear in your recoveries and
+                    activity log.
+                  </p>
+                  <p className="mt-2 text-xs leading-relaxed text-ink-subtle">
+                    This is a repeatable demonstration scenario — the same set of cases
+                    each time, so results are comparable between runs rather than newly
+                    discovered revenue.
                   </p>
                 </div>
 
@@ -177,7 +255,7 @@ export default function BatchPage() {
                   onClick={() => void run()}
                   disabled={running}
                   className="w-full"
-                  aria-label={`Run recovery analysis on ${size} records using ${gateway}`}
+                  aria-label={`Run recovery on ${size} cases`}
                 >
                   {running ? (
                     <>
@@ -187,12 +265,14 @@ export default function BatchPage() {
                   ) : (
                     <>
                       <Play className="h-4 w-4" aria-hidden="true" />
-                      Run recovery analysis
+                      Run recovery
                     </>
                   )}
                 </Button>
               </div>
             </Card>
+
+            <RunHistory runs={history} openRunId={openRunId} />
           </div>
 
           {/* ---------------- Results ---------------- */}
@@ -207,14 +287,98 @@ export default function BatchPage() {
                 onUseSimulator={() => setGateway('local_simulation')}
               />
             ) : result ? (
-              <Results result={result} />
+              <Results
+                result={result}
+                label={runLabel}
+                runId={result.batch_id}
+                openedFromHistory={Boolean(openRunId)}
+              />
             ) : (
               <IdleState />
             )}
           </div>
         </div>
       </main>
-    </div>
+    </AppShell>
+  );
+}
+
+/**
+ * Recent recovery runs.
+ *
+ * Each row reopens a stored run rather than re-running the analysis, which is
+ * the point: a merchant who ran something on Tuesday should be able to look at
+ * Tuesday's result on Thursday without touching the engine again.
+ *
+ * The figures shown are the ones that run reported at the time. They are not
+ * recomputed, so a past run keeps saying what the merchant actually saw.
+ */
+function RunHistory({
+  runs,
+  openRunId,
+}: {
+  runs: RunSummary[];
+  openRunId: string | null;
+}) {
+  if (runs.length === 0) {
+    return (
+      <Card className="mt-5">
+        <div className="p-5">
+          <h2 className="text-sm font-semibold tracking-tight text-ink">
+            Recent recovery runs
+          </h2>
+          <p className="mt-1.5 text-xs leading-relaxed text-ink-subtle">
+            No recovery runs yet. Once you run one, it is saved here so you can come
+            back to the results without running it again.
+          </p>
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="mt-5">
+      <div className="p-5 pb-2">
+        <h2 className="text-sm font-semibold tracking-tight text-ink">
+          Recent recovery runs
+        </h2>
+        <p className="mt-1 text-xs leading-relaxed text-ink-subtle">
+          Reopen a completed run without running it again.
+        </p>
+      </div>
+      <ul className="px-3 pb-4">
+        {runs.map((run) => {
+          const active = run.id === openRunId;
+          return (
+            <li key={run.id}>
+              <Link
+                href={`/batch?run=${encodeURIComponent(run.id)}`}
+                aria-current={active ? 'true' : undefined}
+                className={cn(
+                  'block rounded-lg px-2.5 py-2.5 outline-none transition-colors',
+                  'focus-visible:ring-2 focus-visible:ring-accent',
+                  active ? 'bg-accent/[0.07] ring-1 ring-accent/25' : 'hover:bg-surface-raised',
+                )}
+              >
+                <p className="truncate text-xs font-medium text-ink">{run.name}</p>
+                <p className="mt-0.5 text-micro text-ink-subtle">
+                  {formatDateTime(run.finished_at)} · {gatewayLabel(run.gateway)}
+                </p>
+                <p className="tabular mt-1 text-micro">
+                  <span className="font-medium text-recovered">
+                    {formatInr(run.amount_recovered)} recovered
+                  </span>
+                  <span className="text-ink-subtle">
+                    {' '}
+                    · {formatCount(run.processed)} cases
+                  </span>
+                </p>
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+    </Card>
   );
 }
 
@@ -248,14 +412,17 @@ function RunningState({
 }) {
   // Honest progress: the API gives no percentage, so this reports the stage the
   // pipeline is most likely in rather than faking a progress bar.
-  const phase =
-    elapsed < 1.5
-      ? 'Generating synthetic records and detecting risk'
-      : elapsed < 4
-        ? 'Diagnosing root causes and scoring interventions'
-        : elapsed < 12
-          ? 'Applying policy gates and executing permitted actions'
-          : 'Verifying outcomes and writing the recovery ledger';
+  // Honest staging: the API returns no percentage, so this reports the phase the
+  // work is most likely in rather than animating a fake progress bar.
+  const stages = [
+    'Analysing revenue at risk…',
+    'Choosing recovery actions…',
+    'Applying recovery policies…',
+    'Verifying outcomes…',
+  ];
+  const stageIndex =
+    elapsed < 1.5 ? 0 : elapsed < 4 ? 1 : elapsed < 12 ? 2 : 3;
+  const phase = stages[stageIndex];
 
   return (
     <Card
@@ -267,12 +434,29 @@ function RunningState({
         <Loader2 className="h-5 w-5 animate-spin text-accent" aria-hidden="true" />
       </span>
       <h2 className="mt-4 text-base font-semibold text-ink">
-        Processing {formatCount(size)} records
+        Working {formatCount(size)} cases
       </h2>
-      <p className="mt-2 max-w-md text-sm leading-relaxed text-ink-muted">{phase}…</p>
-      <p className="tabular mt-4 text-micro uppercase text-ink-subtle">
-        {elapsed.toFixed(1)}s elapsed ·{' '}
-        {gateway === 'local_simulation' ? 'built-in simulator' : 'Razorpay test sandbox'}
+      <p className="mt-2 max-w-md text-sm leading-relaxed text-ink-muted">{phase}</p>
+      <ol className="mt-5 space-y-1.5">
+        {stages.map((stage, index) => (
+          <li
+            key={stage}
+            className={cn(
+              'text-xs transition-colors',
+              index < stageIndex
+                ? 'text-recovered'
+                : index === stageIndex
+                  ? 'font-medium text-ink'
+                  : 'text-ink-subtle/60',
+            )}
+          >
+            {index < stageIndex ? '✓ ' : index === stageIndex ? '→ ' : '   '}
+            {stage.replace('…', '')}
+          </li>
+        ))}
+      </ol>
+      <p className="tabular mt-5 text-micro uppercase text-ink-subtle">
+        {gatewayLabel(gateway)}
       </p>
     </Card>
   );
@@ -346,16 +530,26 @@ function ErrorState({
 /* Results                                                                     */
 /* -------------------------------------------------------------------------- */
 
-function Results({ result }: { result: BatchResponse }) {
+function Results({
+  result,
+  label,
+  runId,
+  openedFromHistory,
+}: {
+  result: BatchResponse;
+  label: string | null;
+  runId: string | null;
+  openedFromHistory: boolean;
+}) {
   const money = result.money;
   const triggers = result.stopping_rule_triggers;
   const triggerRows = [
-    { label: 'Cooldown', value: triggers.cooldown },
-    { label: 'Do not contact', value: triggers.do_not_contact },
-    { label: 'Max attempts', value: triggers.max_attempts },
-    { label: 'Hard decline', value: triggers.hard_decline },
+    { label: 'Cooldown period active', value: triggers.cooldown },
+    { label: 'Customer opted out', value: triggers.do_not_contact },
+    { label: 'Attempt limit reached', value: triggers.max_attempts },
+    { label: 'Permanent decline', value: triggers.hard_decline },
     ...Object.entries(triggers.other ?? {}).map(([key, value]) => ({
-      label: humanizeKey(key),
+      label: stopReasonLabel(key),
       value,
     })),
   ];
@@ -363,26 +557,79 @@ function Results({ result }: { result: BatchResponse }) {
 
   return (
     <div className="space-y-5">
-      {/* Run complete — deliberately factual, not celebratory. */}
+      {/* Run complete.
+          Deliberately factual, never celebratory: a low recovery rate is a real
+          result, and BUILD_SPEC Section 11 is explicit that 100% resolution
+          would be a red flag rather than a win. This block answers "what
+          happened in THIS run" — the dashboard KPIs answer "what is in the
+          ledger overall", and conflating the two is what makes repeat runs look
+          like the system is inventing money. */}
       <Card className="border-accent/25 bg-accent/[0.03]">
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-4">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent/10 ring-1 ring-accent/20">
-            <CheckCircle2 className="h-4.5 w-4.5 text-accent" aria-hidden="true" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold text-ink">Run complete</p>
-            <p className="tabular mt-0.5 text-xs text-ink-muted">
-              {formatCount(result.processed)} of {formatCount(result.total_records)}{' '}
-              records processed in {result.duration_seconds.toFixed(1)}s via{' '}
-              {humanizeKey(result.gateway)}
-            </p>
+        <div className="px-5 py-4">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent/10 ring-1 ring-accent/20">
+              <CheckCircle2 className="h-4 w-4 text-accent" aria-hidden="true" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-ink">
+                {label ?? 'Recovery run complete'}
+              </p>
+              <p className="mt-0.5 text-xs text-ink-muted">
+                {openedFromHistory ? 'Saved recovery run' : 'Recovery run complete'} ·{' '}
+                {gatewayLabel(result.gateway)}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {runId ? (
+                <Button asChild variant="secondary" size="sm">
+                  <Link href={`/batch?run=${encodeURIComponent(runId)}`}>
+                    <Clock className="h-3.5 w-3.5" aria-hidden="true" />
+                    View run details
+                  </Link>
+                </Button>
+              ) : null}
+              <Button asChild variant="ghost" size="sm">
+                <Link href="/events">
+                  See the cases
+                  <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+                </Link>
+              </Button>
+            </div>
           </div>
-          <Button asChild variant="secondary" size="sm">
-            <Link href="/events">
-              Inspect events
-              <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
-            </Link>
-          </Button>
+
+          <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-line pt-3.5 sm:grid-cols-4">
+            <Stat label="Cases received" value={formatCount(result.total_records)} />
+            <Stat label="Cases reviewed" value={formatCount(result.processed)} />
+            <Stat
+              label="Could not be read"
+              value={formatCount(result.isolated_failures)}
+              tone={result.isolated_failures > 0 ? 'warn' : undefined}
+              hint="Incomplete records. Each was set aside so the rest of the run continued."
+            />
+            <Stat
+              label="Already seen"
+              value={formatCount(result.skipped_duplicates)}
+              hint="Repeat cases. Revora never contacts a customer twice for the same thing."
+            />
+          </dl>
+
+          <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-line pt-3.5 sm:grid-cols-5">
+            <Stat label="Revenue at risk" value={formatInr(money.amount_at_risk)} />
+            <Stat
+              label="Revenue recovered"
+              value={formatInr(money.amount_recovered)}
+              tone="good"
+            />
+            <Stat label="Recovery rate" value={formatPercent(result.recovery_rate)} />
+            <Stat label="In progress" value={formatInr(money.amount_pending)} />
+            <Stat label="Written off" value={formatInr(money.amount_lost)} />
+          </dl>
+
+          <p className="mt-3 border-t border-line pt-3 text-xs leading-relaxed text-ink-subtle">
+            These figures describe this run only. Your Overview covers every case Revora
+            has worked, so it grows as you run more analyses — each run works a fresh set
+            of cases rather than re-counting earlier ones.
+          </p>
         </div>
       </Card>
 
@@ -426,10 +673,8 @@ function Results({ result }: { result: BatchResponse }) {
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Processing</CardTitle>
-            <CardDescription>
-              How the batch handled what the generator threw at it.
-            </CardDescription>
+            <CardTitle>Recovery activity</CardTitle>
+            <CardDescription>What Revora did across this run.</CardDescription>
           </CardHeader>
           <div className="px-5 pb-5">
             <dl className="grid grid-cols-2 gap-x-4 gap-y-3.5">
@@ -447,21 +692,34 @@ function Results({ result }: { result: BatchResponse }) {
                 hint="Replayed records the generator injects deliberately."
               />
               <Stat
-                label="Escalation ceiling hits"
+                label="Escalation limit reached"
                 value={formatCount(result.escalation_ceiling_hits)}
-                hint="Events the engine would not escalate further."
+                hint="Cases Revora would not push any further."
               />
-              <Stat label="Exceptions raised" value={formatCount(result.exceptions_raised)} />
               <Stat
-                label="ML agreement"
-                value={
-                  result.ml_agreement_rate === null
-                    ? 'No opinion'
-                    : `${formatPercent(result.ml_agreement_rate)} (${formatCount(result.ml_agreements)}/${formatCount(result.ml_predictions)})`
-                }
-                hint="An absent classifier opinion is not counted as a disagreement."
+                label="Needs review"
+                value={formatCount(result.exceptions_raised)}
+                hint="Cases Revora could not resolve confidently on its own."
               />
-              <Stat label="Audit entries" value={formatCount(result.audit_entries)} />
+              <Stat
+                label="Recovery attempts"
+                value={formatCount(
+                  Object.entries(result.action_breakdown)
+                    .filter(([action]) => action !== 'no_action')
+                    .reduce((sum, [, count]) => sum + count, 0),
+                )}
+                hint="Cases where Revora took a recovery action."
+              />
+              <Stat
+                label="Cases recovered"
+                value={formatCount(result.status_breakdown.recovered ?? 0)}
+                tone="good"
+              />
+              <Stat
+                label="Sent for human review"
+                value={formatCount(result.status_breakdown.escalated ?? 0)}
+                hint="Revora handed these to a person instead of acting automatically."
+              />
             </dl>
 
             {/* Promises: reported only if the tracker actually produced any. */}
@@ -474,11 +732,8 @@ function Results({ result }: { result: BatchResponse }) {
                 </dl>
               ) : (
                 <p className="text-xs leading-relaxed text-ink-subtle">
-                  <span className="font-medium text-ink-muted">
-                    Promise-to-pay tracking:
-                  </span>{' '}
-                  no promises were recorded in this run. The promise watcher is not part
-                  of the pipeline yet, so this is a real zero rather than a measurement.
+                  <span className="font-medium text-ink-muted">Promises to pay:</span>{' '}
+                  none were recorded on this run.
                 </p>
               )}
             </div>
@@ -487,16 +742,15 @@ function Results({ result }: { result: BatchResponse }) {
 
         <Card>
           <CardHeader>
-            <CardTitle>Stopping rules</CardTitle>
+            <CardTitle>Where Revora stopped</CardTitle>
             <CardDescription>
-              Where the engine deliberately declined to act. {formatCount(triggerTotal)}{' '}
-              {triggerTotal === 1 ? 'trigger' : 'triggers'} in total.
+              Cases it deliberately left alone, to stay within your limits.
             </CardDescription>
           </CardHeader>
           <div className="px-5 pb-5">
             {triggerTotal === 0 ? (
               <p className="text-xs leading-relaxed text-ink-subtle">
-                No stopping rule fired in this run.
+                Revora stayed within every limit on this run.
               </p>
             ) : (
               <ul className="space-y-2.5">
@@ -543,10 +797,6 @@ function Results({ result }: { result: BatchResponse }) {
         <DirectionBreakdown result={result} />
       </div>
 
-      <p className="text-micro text-ink-subtle">
-        Batch {result.batch_id} · correlation {result.correlation_id} · seed{' '}
-        {result.seed}
-      </p>
     </div>
   );
 }
@@ -560,7 +810,7 @@ function Stat({
   label: string;
   value: string;
   hint?: string;
-  tone?: 'warn';
+  tone?: 'warn' | 'good';
 }) {
   const content = (
     <div className="min-w-0">
@@ -578,7 +828,7 @@ function Stat({
       <dd
         className={cn(
           'tabular mt-0.5 text-sm font-semibold',
-          tone === 'warn' ? 'text-pending' : 'text-ink',
+          tone === 'warn' ? 'text-pending' : tone === 'good' ? 'text-recovered' : 'text-ink',
         )}
       >
         {value}

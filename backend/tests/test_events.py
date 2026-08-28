@@ -151,6 +151,143 @@ class TestEventFeed:
         assert body['total'] > body['returned']
 
 
+class TestMerchantFacingFields:
+    """The merchant UI shows people and dates, not identifiers."""
+
+    def test_every_row_carries_a_customer_name(self, client_and_session):
+        client, _ = client_and_session
+        for item in client.get('/events', params={'limit': 30}).json()['items']:
+            assert item['customer_name']
+            # A name, not the raw id echoed back.
+            assert item['customer_name'] != item['customer_id'] or ' ' not in item['customer_name']
+
+    def test_the_name_comes_from_the_inbound_signal(self, client_and_session):
+        client, session = client_and_session
+        event = list(session.execute(select(RiskEvent).limit(1)).scalars())[0]
+        expected = (event.raw_signal or {}).get('customer_name')
+        item = client.get('/events', params={'q': event.id}).json()['items'][0]
+        if expected:
+            assert item['customer_name'] == expected
+
+    def test_the_id_is_used_only_when_no_name_was_supplied(self, client_and_session):
+        """Falling back to the id is better than rendering an empty cell."""
+        client, session = client_and_session
+        event = list(session.execute(select(RiskEvent).limit(1)).scalars())[0]
+        original = event.raw_signal
+        try:
+            event.raw_signal = {}
+            session.flush()
+            item = client.get('/events', params={'q': event.id}).json()['items'][0]
+            assert item['customer_name'] == event.customer_id
+        finally:
+            event.raw_signal = original
+            session.flush()
+
+
+class TestReportingPeriodFilter:
+    """The period selector must actually change the numbers, not just a label."""
+
+    def test_a_narrow_window_returns_fewer_events(self, client_and_session):
+        from datetime import timedelta
+
+        client, session = client_and_session
+        latest = max(e.detected_at for e in session.execute(select(RiskEvent)).scalars())
+        everything = client.get('/events', params={'limit': 1}).json()
+        recent = client.get(
+            '/events',
+            params={'limit': 1, 'detected_from': (latest - timedelta(days=3)).isoformat()},
+        ).json()
+        assert recent['total'] < everything['total']
+
+    def test_the_money_recalculates_for_the_window(self, client_and_session):
+        """The whole point: filtering must move the amounts, not only the count."""
+        from datetime import timedelta
+        from decimal import Decimal
+
+        client, session = client_and_session
+        latest = max(e.detected_at for e in session.execute(select(RiskEvent)).scalars())
+        everything = client.get('/events', params={'limit': 1}).json()['money']
+        recent = client.get(
+            '/events',
+            params={'limit': 1, 'detected_from': (latest - timedelta(days=3)).isoformat()},
+        ).json()['money']
+        assert Decimal(recent['amount_at_risk']) < Decimal(everything['amount_at_risk'])
+
+    def test_a_future_window_is_empty_rather_than_wrong(self, client_and_session):
+        from datetime import timedelta
+
+        client, session = client_and_session
+        latest = max(e.detected_at for e in session.execute(select(RiskEvent)).scalars())
+        body = client.get(
+            '/events',
+            params={'detected_from': (latest + timedelta(days=365)).isoformat()},
+        ).json()
+        assert body['total'] == 0
+        assert body['money']['amount_at_risk'] == '0.00'
+        assert body['money']['recovery_rate'] == 0.0
+
+    def test_both_bounds_combine(self, client_and_session):
+        from datetime import timedelta
+
+        client, session = client_and_session
+        dates = [e.detected_at for e in session.execute(select(RiskEvent)).scalars()]
+        lo, hi = min(dates), max(dates)
+        mid = lo + (hi - lo) / 2
+        first = client.get(
+            '/events', params={'detected_to': mid.isoformat(), 'limit': 1}
+        ).json()['total']
+        second = client.get(
+            '/events',
+            params={'detected_from': (mid + timedelta(microseconds=1)).isoformat(), 'limit': 1},
+        ).json()['total']
+        assert first + second == client.get('/events', params={'limit': 1}).json()['total']
+
+    def test_a_naive_bound_is_accepted_not_a_500(self, client_and_session):
+        """A query filter must never surface a backend exception.
+
+        The TZDateTime guard rejects naive datetimes on write, which is correct
+        and unchanged. A read filter is not a write: an ordinary caller sending
+        an unzoned timestamp should get results, not a 500 they cannot act on.
+        """
+        client, session = client_and_session
+        latest = max(e.detected_at for e in session.execute(select(RiskEvent)).scalars())
+        naive = latest.replace(tzinfo=None).isoformat()
+        response = client.get('/events', params={'limit': 1, 'detected_from': naive})
+        assert response.status_code == 200
+
+    def test_naive_and_aware_bounds_agree(self, client_and_session):
+        """Interpreted as UTC, so the two spellings give the same answer."""
+        from datetime import timedelta
+
+        client, session = client_and_session
+        latest = max(e.detected_at for e in session.execute(select(RiskEvent)).scalars())
+        cutoff = latest - timedelta(days=5)
+        aware = client.get(
+            '/events', params={'limit': 1, 'detected_from': cutoff.isoformat()}
+        ).json()
+        naive = client.get(
+            '/events',
+            params={'limit': 1, 'detected_from': cutoff.replace(tzinfo=None).isoformat()},
+        ).json()
+        assert aware['total'] == naive['total']
+        assert aware['money'] == naive['money']
+
+    def test_earliest_detected_at_ignores_the_filter(self, client_and_session):
+        """It reports how much history EXISTS, so the UI can say "only N months
+        available" instead of drawing an empty year."""
+        from datetime import timedelta
+
+        client, session = client_and_session
+        latest = max(e.detected_at for e in session.execute(select(RiskEvent)).scalars())
+        unfiltered = client.get('/events', params={'limit': 1}).json()['earliest_detected_at']
+        narrowed = client.get(
+            '/events',
+            params={'limit': 1, 'detected_from': (latest - timedelta(days=1)).isoformat()},
+        ).json()['earliest_detected_at']
+        assert unfiltered == narrowed
+        assert unfiltered is not None
+
+
 class TestFilters:
     def test_status_filter_narrows(self, client_and_session):
         client, _ = client_and_session

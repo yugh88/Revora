@@ -238,35 +238,40 @@ class TestScriptGenerationIsSideEffectFree:
             client.get(f"/scripts/{event.id}")
         assert len(list(session.execute(select(Decision)).scalars())) == before
 
-    def test_the_production_endpoint_uses_the_real_clock(self):
-        """The router must NOT pin the time.
+    def test_the_production_endpoint_uses_the_real_clock(
+        self, client_and_session, monkeypatch
+    ):
+        """The live path must hand the rule NO clock; the preview must hand it one.
 
-        generate_script accepts an optional `now` so compliance can be tested
-        deterministically, and the tests above use it. Production must never
-        pass it: an endpoint with a frozen clock would answer "inside the
-        contact window" at 3am. This is the guard against someone resolving a
-        future timing flake by freezing the wrong side of the boundary.
+        Checked behaviourally rather than by parsing source: a spy records the
+        `now` each path actually passes to check_contact_window, which survives
+        refactoring of how the handlers are wired. An earlier AST version of this
+        test broke the moment the two handlers began sharing a helper — and it
+        broke correctly, which is why it is worth having at all.
+
+        A live endpoint with a pinned clock would answer "inside the contact
+        window" at 3am.
         """
-        import ast
-        import inspect
+        client, session = client_and_session
+        event_id = any_event_id(session)
 
-        from app.routers import scripts as scripts_router
+        seen: list = []
+        real = template_engine.check_contact_window
 
-        tree = ast.parse(inspect.getsource(scripts_router))
-        calls = [
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "generate_script"
-        ]
-        assert calls, "the router no longer calls generate_script"
-        for call in calls:
-            passed = {kw.arg for kw in call.keywords}
-            assert "now" not in passed, (
-                "the production endpoint pinned the clock; it must use the "
-                "real current time"
-            )
+        def spy(now=None):
+            seen.append(now)
+            return real(now)
+
+        monkeypatch.setattr(template_engine, "check_contact_window", spy)
+
+        client.get(f"/scripts/{event_id}")
+        assert seen == [None], "the live endpoint supplied a clock; it must use real time"
+
+        seen.clear()
+        client.get(f"/scripts/{event_id}/preview")
+        assert len(seen) == 1
+        assert seen[0] is not None, "the preview must supply a deterministic instant"
+        assert real(seen[0]).passed is True, "the preview instant must be in-window"
 
     def test_the_endpoint_exposes_no_write_method(self, client_and_session):
         methods = set()
@@ -283,3 +288,237 @@ class TestScriptGenerationIsSideEffectFree:
         second = client.get(f"/scripts/{event_id}").json()
         assert first["script"] == second["script"]
         assert first["reasoning"] == second["reasoning"]
+
+
+# --------------------------------------------------------------------------- #
+# Demo preview — GET /scripts/{event_id}/preview
+# --------------------------------------------------------------------------- #
+
+
+class TestDemoPreview:
+    """The preview must demonstrate the compliance gate, never evade it.
+
+    It exists so the Section 7 Hinglish capability is visible to someone opening
+    Revora at 20:00 IST, when the live rule correctly withholds every script.
+    The only thing it changes is the instant the contact-window rule is
+    evaluated against.
+    """
+
+    def _any_event_id(self, client) -> str:
+        return client.get("/events", params={"limit": 1}).json()["items"][0]["id"]
+
+    def test_the_preview_instant_is_inside_the_configured_window(self):
+        """Derived from compliance_rules.yaml, not hardcoded — so narrowing the
+        window cannot leave the preview failing its own check."""
+        moment = template_engine.preview_instant()
+        assert template_engine.check_contact_window(moment).passed is True
+
+    def test_the_preview_instant_tracks_the_configured_window(self, monkeypatch):
+        bundle = template_engine.load_templates()
+        original = dict(bundle["compliance"]["contact_window"])
+        try:
+            bundle["compliance"]["contact_window"].update({"start_hour": 9, "end_hour": 11})
+            moment = template_engine.preview_instant()
+            assert moment.hour == 10
+            assert template_engine.check_contact_window(moment).passed is True
+        finally:
+            bundle["compliance"]["contact_window"].update(original)
+
+    def test_preview_renders_when_live_is_withheld(self, client_and_session, after_hours):
+        """The whole point: outside the window, live refuses and preview shows
+        what the same engine would produce inside it."""
+        client, session = client_and_session
+        event_id = any_event_id(session)
+
+        live = client.get(f"/scripts/{event_id}").json()
+        assert live["compliant"] is False
+        assert live["script"] == ""
+        assert "outside" in (live["failure_reason"] or "")
+
+        preview = client.get(f"/scripts/{event_id}/preview").json()
+        assert preview["compliant"] is True
+        assert preview["script"]
+
+    def test_the_preview_is_explicitly_flagged(self, client_and_session):
+        """A preview must be impossible to mistake for a live result."""
+        client, session = client_and_session
+        event_id = any_event_id(session)
+        assert client.get(f"/scripts/{event_id}").json()["is_preview"] is False
+        body = client.get(f"/scripts/{event_id}/preview").json()
+        assert body["is_preview"] is True
+        assert body["preview_time"]
+
+    def test_preview_uses_the_same_yaml_templates(self, client_and_session, at_midday):
+        """Not a second engine and not duplicated prose: inside the window the
+        live and preview paths must produce byte-identical output."""
+        client, session = client_and_session
+        event_id = any_event_id(session)
+        live = client.get(f"/scripts/{event_id}").json()
+        preview = client.get(f"/scripts/{event_id}/preview").json()
+        assert preview["script"] == live["script"]
+        assert preview["reasoning"] == live["reasoning"]
+        assert preview["template_key"] == live["template_key"]
+        assert preview["tone"] == live["tone"]
+        assert preview["urgency"] == live["urgency"]
+
+    def test_preview_is_hinglish_from_the_yaml(self, client_and_session):
+        client, session = client_and_session
+        found = False
+        for event in list(session.execute(select(RiskEvent).limit(30)).scalars()):
+            body = client.get(f"/scripts/{event.id}/preview").json()
+            if body["compliant"]:
+                assert any(w in body["script"] for w in ("Namaste", "aapka", "hai", "kar"))
+                assert body["template_key"]
+                found = True
+                break
+        assert found, "no compliant preview in this batch"
+
+    def test_a_missing_event_is_a_404(self, client_and_session):
+        client, _ = client_and_session
+        assert client.get("/scripts/evt_nope/preview").status_code == 404
+
+    def test_only_the_contact_window_check_differs(self, client_and_session, after_hours):
+        """Every other rule returns the identical verdict on both paths. This is
+        the structural claim the preview rests on."""
+        client, session = client_and_session
+        event_id = any_event_id(session)
+        live = {c["rule_id"]: c["passed"] for c in client.get(f"/scripts/{event_id}").json()["compliance_checks"]}
+        preview = {
+            c["rule_id"]: c["passed"]
+            for c in client.get(f"/scripts/{event_id}/preview").json()["compliance_checks"]
+        }
+        for rule_id, passed in live.items():
+            if rule_id == "contact_time_window":
+                assert passed is False and preview[rule_id] is True
+            else:
+                assert preview[rule_id] == passed, f"{rule_id} differed between paths"
+
+
+class TestPreviewDoesNotBypassCompliance:
+    """A preview that only relaxed rule 1 is honest. One that relaxed the others
+    would be a backdoor, so each is tested against constructed state."""
+
+    def _client(self, session):
+        from fastapi.testclient import TestClient
+
+        app.dependency_overrides[get_db] = lambda: session
+        return TestClient(app)
+
+    def test_the_frequency_cap_still_refuses(self, client_and_session):
+        """Push an event to its contact limit and confirm the preview refuses."""
+        client, session = client_and_session
+        event_id = any_event_id(session)
+        state = session.get(StoppingRuleState, event_id)
+        original = state.attempts_used
+        try:
+            state.attempts_used = 99  # far past any configured limit
+            session.flush()
+            body = client.get(f"/scripts/{event_id}/preview").json()
+            assert body["compliant"] is False
+            assert body["script"] == ""
+            cap = [c for c in body["compliance_checks"] if c["rule_id"] == "frequency_cap"][0]
+            assert cap["passed"] is False
+            # And the contact window DID pass, proving only rule 1 moved.
+            window = [
+                c for c in body["compliance_checks"] if c["rule_id"] == "contact_time_window"
+            ][0]
+            assert window["passed"] is True
+        finally:
+            state.attempts_used = original
+            session.flush()
+
+    def test_the_urgency_ceiling_still_applies(self, client_and_session):
+        """Urgency is bounded by the escalation level actually reached, on the
+        preview path exactly as on the live one."""
+        client, session = client_and_session
+        rank = {"low": 0, "medium": 1, "high": 2}
+        for event in list(session.execute(select(RiskEvent).limit(25)).scalars()):
+            body = client.get(f"/scripts/{event.id}/preview").json()
+            state = session.get(StoppingRuleState, event.id)
+            level = state.escalation_level if state else 0
+            assert rank[body["urgency"]] <= level or body["urgency"] == "low"
+
+    def test_the_language_blocklist_still_applies(self, client_and_session, monkeypatch):
+        """Even on the preview path, a coercive render produces no text."""
+        client, session = client_and_session
+        monkeypatch.setattr(
+            template_engine,
+            "render_script",
+            lambda slots, tone, urgency: ("We will take legal action", "stub"),
+        )
+        body = client.get(f"/scripts/{any_event_id(session)}/preview").json()
+        assert body["compliant"] is False
+        assert body["script"] == ""
+
+    def test_a_refused_preview_never_leaks_text(self, client_and_session):
+        """Whatever the reason, a non-compliant preview carries no script."""
+        client, session = client_and_session
+        event_id = any_event_id(session)
+        state = session.get(StoppingRuleState, event_id)
+        original = state.attempts_used
+        try:
+            state.attempts_used = 99
+            session.flush()
+            body = client.get(f"/scripts/{event_id}/preview").json()
+            assert body["script"] == ""
+            assert body["failure_reason"]
+        finally:
+            state.attempts_used = original
+            session.flush()
+
+
+class TestPreviewIsSideEffectFree:
+    """Nothing is sent, nothing is written. A preview is a rendering, not a
+    contact — so none of the words "sent", "delivered" or "executed" apply."""
+
+    def _counts(self, session):
+        return (
+            len(list(session.execute(select(AuditLog)).scalars())),
+            len(list(session.execute(select(PaymentAttempt)).scalars())),
+            len(list(session.execute(select(Decision)).scalars())),
+            len(list(session.execute(select(StoppingRuleState)).scalars())),
+        )
+
+    def test_it_writes_no_rows(self, client_and_session):
+        client, session = client_and_session
+        before = self._counts(session)
+        for event in list(session.execute(select(RiskEvent).limit(15)).scalars()):
+            client.get(f"/scripts/{event.id}/preview")
+        assert self._counts(session) == before
+
+    def test_it_does_not_move_the_state_machine(self, client_and_session):
+        client, session = client_and_session
+        before = {e.id: e.status for e in session.execute(select(RiskEvent)).scalars()}
+        for event_id in list(before)[:15]:
+            client.get(f"/scripts/{event_id}/preview")
+        after = {e.id: e.status for e in session.execute(select(RiskEvent)).scalars()}
+        assert before == after
+
+    def test_it_does_not_touch_stopping_rule_state(self, client_and_session):
+        client, session = client_and_session
+        before = {
+            s.event_id: (s.attempts_used, s.escalation_level, s.hard_stop_reason)
+            for s in session.execute(select(StoppingRuleState)).scalars()
+        }
+        for event_id in list(before)[:15]:
+            client.get(f"/scripts/{event_id}/preview")
+        after = {
+            s.event_id: (s.attempts_used, s.escalation_level, s.hard_stop_reason)
+            for s in session.execute(select(StoppingRuleState)).scalars()
+        }
+        assert before == after
+
+    def test_the_preview_route_exposes_no_write_method(self):
+        methods = set()
+        for route in app.routes:
+            if getattr(route, "path", "").endswith("/preview"):
+                methods |= set(getattr(route, "methods", set()))
+        assert methods <= {"GET", "HEAD", "OPTIONS"}
+
+    def test_repeated_previews_are_identical(self, client_and_session):
+        client, session = client_and_session
+        event_id = any_event_id(session)
+        first = client.get(f"/scripts/{event_id}/preview").json()
+        second = client.get(f"/scripts/{event_id}/preview").json()
+        assert first["script"] == second["script"]
+        assert first["compliance_checks"] == second["compliance_checks"]

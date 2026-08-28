@@ -68,18 +68,30 @@ class ScriptResponse(BaseModel):
     template_key: str = ""
     slots_used: dict[str, Any] = {}
 
+    #: True ONLY on the /preview path. The live endpoint always returns False,
+    #: so a preview can never be mistaken for a real compliant result by a
+    #: client, a log, or a screenshot.
+    is_preview: bool = False
+    #: The instant the contact-window rule was evaluated against. None on the
+    #: live path, where the real current time was used.
+    preview_time: str | None = None
 
-@router.get(
-    "/scripts/{event_id}",
-    response_model=ScriptResponse,
-    summary="Compliance-checked Hinglish script for one event",
-)
-def get_script(
+
+def _build_script_response(
+    session: Session,
     event_id: str,
-    channel: str = Query(default="voice_script"),
-    session: Session = Depends(get_db),
+    channel: str,
+    *,
+    now: Any = None,
+    is_preview: bool = False,
 ) -> ScriptResponse:
-    """Render the script Revora would use for this event, if it may."""
+    """Shared body for the live and preview paths.
+
+    ONE code path, one template engine, one set of YAML files. The two endpoints
+    differ by exactly one argument — the instant the contact-window rule is
+    evaluated against — which is what makes the preview an honest demonstration
+    of the live behaviour rather than a parallel implementation of it.
+    """
     event = session.get(RiskEvent, event_id)
     if event is None:
         raise HTTPException(
@@ -106,6 +118,7 @@ def get_script(
             policy=policy,
             customer=session.get(CustomerProfile, event.customer_id),
             channel=channel,
+            now=now,
         )
     except TemplateError as exc:
         # A template problem is a configuration problem, not a customer-facing
@@ -145,4 +158,67 @@ def get_script(
         failure_reason=result.failure_reason,
         template_key=result.template_key,
         slots_used=result.slots_used,
+        is_preview=is_preview,
+        preview_time=now.isoformat() if now is not None else None,
+    )
+
+
+@router.get(
+    "/scripts/{event_id}",
+    response_model=ScriptResponse,
+    summary="Compliance-checked Hinglish script for one event",
+)
+def get_script(
+    event_id: str,
+    channel: str = Query(default="voice_script"),
+    session: Session = Depends(get_db),
+) -> ScriptResponse:
+    """Render the script Revora would use for this event, if it may.
+
+    Uses the REAL current time. Outside 08:00-19:00 IST the contact-window rule
+    refuses and no text is produced. No caller may override that: there is no
+    `now` parameter on this path, and a test asserts it never acquires one.
+    """
+    return _build_script_response(session, event_id, channel)
+
+
+@router.get(
+    "/scripts/{event_id}/preview",
+    response_model=ScriptResponse,
+    summary="Read-only demo preview — NOT a live contact",
+)
+def preview_script(
+    event_id: str,
+    channel: str = Query(default="voice_script"),
+    session: Session = Depends(get_db),
+) -> ScriptResponse:
+    """Show what the SAME engine would render during a permitted contact window.
+
+    This exists because a judge may open Revora at 20:00 IST and would otherwise
+    never see the Section 7 Hinglish capability at all — the live rule would
+    correctly withhold every script.
+
+    It is NOT a bypass. The only thing that changes is the instant the
+    contact-window rule is evaluated against, and that instant is derived from
+    the configured window itself. Every other rule runs for real against the
+    recorded state:
+
+      * frequency cap    — StoppingRuleState.attempts_used vs the merchant's
+                           Policy.contact_limit_per_channel
+      * urgency ceiling  — the escalation level this event actually reached
+      * coercive language — the blocklist, applied to the rendered output
+
+    An event refused for any of those is refused here too, with no script text,
+    exactly as on the live path. The preview therefore demonstrates the
+    compliance gate rather than evading it.
+
+    Read-only and side-effect free: no audit row, no attempt, no decision, no
+    state transition. Nothing is sent to anyone.
+    """
+    return _build_script_response(
+        session,
+        event_id,
+        channel,
+        now=template_engine.preview_instant(),
+        is_preview=True,
     )

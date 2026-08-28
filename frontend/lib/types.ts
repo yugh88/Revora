@@ -154,6 +154,8 @@ export interface EventSummary {
   type: EventType;
   merchant_id: string;
   customer_id: string;
+  /** The customer's name. The UI shows people, never identifiers. */
+  customer_name: string;
   amount: string;
   currency: string;
   source_ref: string | null;
@@ -198,11 +200,15 @@ export interface EventListResponse {
   type_breakdown: Record<string, number>;
   needs_review_count: number;
   money: EventMoneySummary;
+  /** Oldest event in the WHOLE ledger, ignoring filters. */
+  earliest_detected_at: string | null;
   items: EventSummary[];
 }
 
 /** Server-side filters. Every key maps to a real query parameter. */
 export interface EventListQuery {
+  detected_from?: string;
+  detected_to?: string;
   status?: EventStatus;
   type?: EventType;
   gateway?: GatewayUsed;
@@ -385,6 +391,12 @@ export interface ScriptResponse {
   failure_reason: string | null;
   template_key: string;
   slots_used: Record<string, unknown>;
+  /** True only on the /preview path. A preview is a rendering demonstration,
+   *  never a contact — the live endpoint always returns false. */
+  is_preview: boolean;
+  /** The instant the contact-window rule was evaluated against. Null on the
+   *  live path, where the real current time was used. */
+  preview_time: string | null;
 }
 
 /* --------------------------------------------------------------------------
@@ -428,3 +440,112 @@ export const EVENT_TYPE_HINTS: Record<EventType, string> = {
   invoice_overdue: 'An issued invoice is past its due date',
   mandate_failed: 'A NACH or UPI autopay mandate did not execute',
 };
+
+/* --------------------------------------------------------------------------
+ * Recovery run history — GET /batch/runs, GET /batch/runs/{id}
+ * -------------------------------------------------------------------------- */
+
+export interface RunSummary {
+  id: string;
+  name: string;
+  finished_at: string;
+  gateway: GatewayUsed;
+  total_records: number;
+  processed: number;
+  amount_at_risk: string;
+  amount_recovered: string;
+  amount_pending: string;
+  amount_lost: string;
+  recovery_rate: number;
+  recovered_count: number;
+  escalated_count: number;
+}
+
+export interface RunListResponse {
+  total: number;
+  items: RunSummary[];
+}
+
+export interface RunDetailResponse {
+  run: RunSummary;
+  /** The full response that run returned when it finished. */
+  snapshot: BatchResponse;
+}
+
+/* --------------------------------------------------------------------------
+ * Promise to Pay
+ * -------------------------------------------------------------------------- */
+
+/** The state a merchant sees. Derived by the backend from the promised date. */
+export type PromiseStatus = 'promised' | 'due_soon' | 'fulfilled' | 'overdue' | 'cancelled';
+
+export interface PromiseOut {
+  id: string;
+  customer_name: string;
+  promised_amount: string;
+  currency: string;
+  promised_date: string;
+  created_at: string;
+  resolved_at: string | null;
+  status: PromiseStatus;
+  event_id: string;
+  event_type: EventType;
+  amount_at_risk: string;
+  /** Read back from the ledger, never inferred from the promise. */
+  recovered: boolean;
+  amount_recovered: string;
+}
+
+export interface PromiseListResponse {
+  total: number;
+  status_breakdown: Record<string, number>;
+  total_promised: string;
+  total_fulfilled: string;
+  items: PromiseOut[];
+}
+
+export interface PromiseCreate {
+  event_id: string;
+  promised_amount: string;
+  promised_date: string;
+}
+
+/* --------------------------------------------------------------------------
+ * Communications — Email / SMS / Voice
+ * --------------------------------------------------------------------------
+ * There is no "sent" or "delivered" status, deliberately: Revora has no
+ * provider, so the type system offers nothing the UI could use to claim a
+ * customer was contacted.
+ */
+
+export type CommunicationChannel = 'email' | 'sms' | 'voice_script' | 'in_app';
+export type CommunicationStatus = 'prepared' | 'simulated' | 'blocked';
+export type CustomerResponse = 'promised_to_pay' | 'paid' | 'no_response';
+
+export interface CommunicationOut {
+  id: string;
+  customer_name: string;
+  channel: CommunicationChannel;
+  status: CommunicationStatus;
+  /** Empty when compliance refused. Never partially rendered. */
+  body: string;
+  reason: string;
+  blocked_reason: string | null;
+  /** Always true. No provider integration exists. */
+  is_simulated: boolean;
+  created_at: string;
+  simulated_at: string | null;
+  customer_response: CustomerResponse | null;
+  responded_at: string | null;
+  promise_id: string | null;
+  event_id: string;
+  event_type: EventType;
+  amount_at_risk: string;
+}
+
+export interface CommunicationListResponse {
+  total: number;
+  channel_breakdown: Record<string, number>;
+  status_breakdown: Record<string, number>;
+  items: CommunicationOut[];
+}

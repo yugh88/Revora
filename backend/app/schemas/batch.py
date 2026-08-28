@@ -237,3 +237,40 @@ class AuditTrailResponse(BaseModel):
 
 
 AuditSortOrder = Literal["asc", "desc"]
+
+
+class RunSummary(BaseModel):
+    """One completed run, as it reported itself.
+
+    A historical snapshot, not a recomputation: these are the figures the run
+    produced at the time. The recovery ledger stays authoritative for what is
+    true now.
+    """
+
+    id: str
+    name: str
+    finished_at: str
+    gateway: GatewayUsed
+    total_records: int
+    processed: int
+    amount_at_risk: str
+    amount_recovered: str
+    amount_pending: str
+    amount_lost: str
+    recovery_rate: float
+    recovered_count: int
+    escalated_count: int
+
+
+class RunListResponse(BaseModel):
+    total: int
+    items: list[RunSummary]
+
+
+class RunDetailResponse(BaseModel):
+    """A run summary plus the full response it returned when it finished."""
+
+    run: RunSummary
+    #: The complete BatchResponse, stored verbatim so reopening a run renders
+    #: through exactly the same presentation it did on completion.
+    snapshot: dict[str, Any]

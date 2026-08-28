@@ -255,6 +255,28 @@ def select_urgency(*, escalation_level: int, days_overdue: int = 0) -> str:
     return min(proposed, ceiling, key=lambda value: URGENCIES.index(value))
 
 
+def preview_instant(now: datetime | None = None) -> datetime:
+    """A deterministic instant inside the configured contact window.
+
+    Used only by the READ-ONLY demo preview (GET /scripts/{id}/preview), so the
+    Section 7 Hinglish capability can be demonstrated outside 08:00-19:00 IST
+    without touching the live rule.
+
+    Derived from compliance_rules.yaml rather than hardcoded: it returns the
+    midpoint of whatever window is configured. If the window is ever narrowed,
+    the preview instant moves with it and stays valid — a hardcoded 12:00 would
+    silently start failing its own compliance check.
+
+    This relaxes NOTHING else. `now` reaches only check_contact_window; the
+    frequency cap, urgency ceiling and coercive-language checks never see it, so
+    a preview cannot make an otherwise-refused script appear permitted.
+    """
+    rules = load_templates()["compliance"]["contact_window"]
+    midpoint = (int(rules["start_hour"]) + int(rules["end_hour"])) // 2
+    today = (now or datetime.now(timezone.utc)).astimezone(IST)
+    return today.replace(hour=midpoint, minute=0, second=0, microsecond=0)
+
+
 def permitted_urgency(escalation_level: int) -> str:
     """Highest urgency rule 4 allows at this escalation level."""
     rules = load_templates()["compliance"]["urgency"]

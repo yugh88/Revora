@@ -234,10 +234,14 @@ open → diagnosing → intervening → { recovered | escalated | unrecoverable 
 - `POST /events` — ingest a risk event (webhook or synthetic)
 - `GET /events`, `GET /events/{id}` — feed + drill-down (diagnosis, decision, stopping-rule state, audit timeline)
 - `POST /batch` — process N synthetic records (default 50, supports 500), `gateway` param [local_simulation|razorpay_test]; returns amount at risk/attempted/recovered/lost + recovery rate (from actual ledger state), **plus explicit breakdowns that directly prove the bar**: `escalation_ceiling_hits` (count stopped from escalating further), `stopping_rule_triggers` (broken down by reason: cooldown, do_not_contact, max_attempts, hard_decline), `promises_made` / `promises_kept` / `promises_broken`
+- `GET /batch/runs`, `GET /batch/runs/{run_id}` — READ-ONLY history of completed runs, so a finished analysis can be reopened later without re-running it. Stores a snapshot of what that run reported; the recovery ledger remains the single source of financial truth.
 - `GET /exceptions` — unresolved/low-confidence cases + why the engine chose not to act
 - `GET /policies`, `PUT /policies` — merchant-configurable thresholds
 - `GET /audit` — searchable immutable log
+- `GET /communications`, `POST /communications/prepare`, `POST /communications/{id}/simulate-send`, `POST /communications/{id}/simulate-response` — Email/SMS/Voice recovery contacts. Message bodies come from the existing compliance-checked template engine; a refused message is recorded as blocked and carries no text. NOTHING is ever sent: there is no provider integration, every record is explicitly marked simulated, and a simulated customer response is what creates a Promise to Pay.
+- `GET /promises`, `GET /promises/{id}`, `POST /promises`, `POST /promises/{id}/fulfil`, `POST /promises/{id}/cancel`, `POST /promises/evaluate` — Promise-to-Pay lifecycle. Fulfilment records recovery through the same `upsert_outcome` the batch uses; the ledger stays the single source of financial truth.
 - `GET /scripts/{event_id}` — Hinglish script + reasoning + tone + urgency + compliance validation
+- `GET /scripts/{event_id}/preview` — READ-ONLY demo preview of the same template engine, evaluated against a deterministic instant inside the configured contact window. Runs every other compliance rule for real (frequency cap, urgency ceiling, coercive language) and writes nothing. Exists so the Section 7 capability is demonstrable outside 08:00-19:00 IST; it is a rendering demonstration, never a contact.
 - `GET /ml/metrics` — held-out precision/recall/confusion matrix for the diagnosis classifier (Section 4a)
 
 ---
@@ -289,6 +293,8 @@ revora/
 │   │   │   ├── stopping_rule_state.py
 │   │   │   ├── policy.py
 │   │   │   ├── outcome.py
+│   │   │   ├── communication_log.py            # one prepared/simulated recovery contact
+│   │   │   ├── recovery_run.py                  # persisted snapshot of one completed run
 │   │   │   ├── promise_to_pay.py
 │   │   │   └── audit_log.py
 │   │   ├── schemas/                     # Pydantic request/response, mirrors models/
@@ -313,6 +319,8 @@ revora/
 │   │   │   ├── exceptions.py
 │   │   │   ├── policies.py
 │   │   │   ├── audit.py
+│   │   │   ├── communications.py                # prepare / simulate send / simulate response
+│   │   │   ├── promises.py                      # Promise-to-Pay: create, list, fulfil, cancel
 │   │   │   ├── scripts.py
 │   │   │   └── ml.py                    # /ml/metrics, Section 4a
 │   │   ├── ml/                          # hybrid ML layer, Section 4a — self-trained, no LLM/API
@@ -342,6 +350,9 @@ revora/
 │       ├── test_batch_fault_isolation.py
 │       ├── test_exceptions.py
 │       ├── test_events.py
+│       ├── test_recovery_runs.py
+│       ├── test_promises.py
+│       ├── test_communications.py
 │       ├── test_template_engine.py
 │       ├── test_policies.py
 │       ├── test_scripts.py
@@ -368,10 +379,12 @@ revora/
     │   ├── exceptions/page.tsx
     │   ├── audit/page.tsx
     │   ├── scripts/page.tsx
+    │   ├── communications/page.tsx           # Email / SMS / Voice recovery contacts
+    │   ├── promises/page.tsx                 # merchant list, detail, customer promise simulation
     │   └── policies/page.tsx
     ├── components/
     │   ├── ui/                               # shadcn/ui generated components
-    │   │                                     #   incl. site-header.tsx (shared nav shell)
+    │   │                                     #   incl. site-header.tsx (sidebar + topbar app shell)
     │   ├── KpiCard.tsx
     │   ├── RecoveryChart.tsx
     │   ├── DirectionBreakdown.tsx
@@ -383,6 +396,7 @@ revora/
     │   ├── GatewayToggle.tsx                 # Section 5 — the built-in-vs-Razorpay switch
     │   └── SkeletonLoader.tsx
     └── lib/
+        ├── labels.ts                         # one humanisation map for every enum shown to a user
         ├── api-client.ts                     # fetch wrapper to FastAPI
         └── types.ts                          # TS types mirroring backend schemas
 ```
