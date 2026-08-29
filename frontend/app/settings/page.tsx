@@ -1,9 +1,8 @@
 'use client';
 
 import * as React from 'react';
-import { Building2, CheckCircle2, ShieldCheck } from 'lucide-react';
+import { Building2, CheckCircle2 } from 'lucide-react';
 
-import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Card, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
 import { AppShell } from '../../components/ui/site-header';
@@ -17,10 +16,12 @@ import { cn } from '../../components/ui/utils';
  * completeness" is a large attack surface bought with no benefit.
  *
  * Preferences are kept in the browser. They shape how this installation
- * presents itself; nothing here can change what the recovery engine does. The
- * limits that actually bind Revora — attempts, cooldowns, contact caps — live
- * on the Policies page and are enforced server-side, which is where a control
- * over money belongs.
+ * presents itself; nothing here can change what the recovery engine does.
+ *
+ * That is also why there is no "recovery environment" control here. The
+ * environment is chosen per run and enforced by the backend, so a switch on
+ * this page would be a control that looks authoritative and decides nothing —
+ * the worst kind of setting to put in front of someone.
  *
  * No secret appears here. The Razorpay keys live in the backend environment and
  * the frontend has never been able to read them.
@@ -164,33 +165,6 @@ export default function SettingsPage() {
                 checked={prefs.notifyAttention}
                 onChange={(value) => set('notifyAttention', value)}
               />
-            </div>
-          </Card>
-
-          <Card className="animate-fade-up stagger-3">
-            <CardHeader>
-              <div className="flex items-start gap-2.5">
-                <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-surface-raised text-ink-muted ring-1 ring-line">
-                  <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
-                </span>
-                <div>
-                  <CardTitle>Recovery environment</CardTitle>
-                  <CardDescription>Where recovery actions are carried out.</CardDescription>
-                </div>
-              </div>
-            </CardHeader>
-            <div className="px-5 pb-5">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="accent">Demo Simulation</Badge>
-                <span className="text-xs text-ink-muted">
-                  Safe demo environment. No real payments or customer contacts.
-                </span>
-              </div>
-              <p className="mt-3 text-xs leading-relaxed text-ink-subtle">
-                Razorpay Test Sandbox can be chosen per run on the Run Recovery page. It
-                is sandbox-only and never touches production. Your Razorpay keys are held
-                by the server and are never sent to this page.
-              </p>
             </div>
           </Card>
 

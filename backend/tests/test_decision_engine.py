@@ -434,15 +434,22 @@ class TestRuleEngineStaysAuthoritative:
         """P(recovery) is keyed on the root cause, so a substituted cause would
         change the score even when the action happens to match.
 
-        card_expired + update_card_email scores 0.55; network_timeout + the same
-        action scores 0.20. The gap is what makes this detectable.
+        card_expired + update_card_email and network_timeout + the same action
+        carry different base rates, so a leaked ML cause would move this number.
+
+        The assertion is that the two runs AGREE, not that they equal a
+        particular constant. The probability now also reflects what is known
+        about the customer, and pinning it to a base rate would have made this
+        test fail for a reason that has nothing to do with the property it
+        exists to protect.
         """
         without = decide(db_session, make_event(), load_ml=False, now=T0)
         with_ml = decide(
             db_session, make_event(), classifier=DisagreeingClassifier(), now=T0
         )
-        assert without.decision.recovery_probability == 0.55
-        assert with_ml.decision.recovery_probability == 0.55
+        assert without.decision.recovery_probability == with_ml.decision.recovery_probability
+        # And it is still a real probability, not an artefact of the adjustment.
+        assert 0.0 < without.decision.recovery_probability <= 1.0
 
     def test_a_disagreeing_model_does_not_change_the_probability(self, db_session, make_event):
         without = decide(db_session, make_event(), load_ml=False, now=T0)

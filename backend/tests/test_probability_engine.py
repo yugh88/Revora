@@ -26,6 +26,7 @@ from decimal import Decimal
 import pytest
 
 from app.engine.diagnosis_engine import ActionCode
+from app.engine import probability_engine
 from app.engine.probability_engine import (
     ANNOYANCE_PENALTY,
     ANNOYANCE_PENALTY_BEYOND,
@@ -404,3 +405,101 @@ class TestActionScore:
         )
         with pytest.raises(Exception):
             result.score = Decimal("999999.00")  # type: ignore[misc]
+
+
+class TestCustomerLikelihood:
+    """Customer history adjusts the probability the engine already uses.
+
+    The properties worth guarding are about restraint. A history signal that
+    could swing a probability from 0.2 to 0.9 would make the recorded base rates
+    decorative, and a customer with no history must not be treated as a bad one
+    — that would penalise every new customer for being new.
+    """
+
+    def test_no_history_changes_nothing(self):
+        multiplier, reason = probability_engine.customer_likelihood(
+            payment_success_rate=None, avg_payment_delay_days=None
+        )
+        assert multiplier == 1.0
+        assert reason is None
+
+    def test_a_reliable_payer_raises_the_odds(self):
+        multiplier, _ = probability_engine.customer_likelihood(
+            payment_success_rate=0.92, avg_payment_delay_days=1.0
+        )
+        assert multiplier > 1.0
+
+    def test_an_unreliable_payer_lowers_them(self):
+        multiplier, _ = probability_engine.customer_likelihood(
+            payment_success_rate=0.15, avg_payment_delay_days=45.0
+        )
+        assert multiplier < 1.0
+
+    def test_broken_promises_lower_the_odds(self):
+        kept, _ = probability_engine.customer_likelihood(
+            payment_success_rate=0.5, avg_payment_delay_days=None,
+            promises_kept=3, promises_broken=0,
+        )
+        broken, _ = probability_engine.customer_likelihood(
+            payment_success_rate=0.5, avg_payment_delay_days=None,
+            promises_kept=0, promises_broken=3,
+        )
+        assert broken < kept
+
+    def test_the_adjustment_is_bounded_in_both_directions(self):
+        """One feature must not be able to take over the decision."""
+        best, _ = probability_engine.customer_likelihood(
+            payment_success_rate=1.0, avg_payment_delay_days=0.0,
+            promises_kept=50, promises_broken=0,
+        )
+        worst, _ = probability_engine.customer_likelihood(
+            payment_success_rate=0.0, avg_payment_delay_days=999.0,
+            promises_kept=0, promises_broken=50,
+        )
+        limit = probability_engine.CUSTOMER_ADJUSTMENT_RANGE
+        assert best <= 1.0 + limit + 1e-9
+        assert worst >= 1.0 - limit - 1e-9
+
+    def test_a_strong_signal_is_explained_in_plain_words(self):
+        _, reason = probability_engine.customer_likelihood(
+            payment_success_rate=0.95, avg_payment_delay_days=1.0
+        )
+        assert reason
+        assert "_" not in reason  # merchant language, not an identifier
+
+    def test_a_weak_signal_claims_nothing(self):
+        """Only reasons supported by an actual signal."""
+        _, reason = probability_engine.customer_likelihood(
+            payment_success_rate=0.52, avg_payment_delay_days=2.0
+        )
+        assert reason is None
+
+
+class TestProbabilityStaysBounded:
+    def test_the_default_multiplier_preserves_existing_behaviour(self):
+        """Every existing caller must get exactly the answer it always did."""
+        for cause, action in list(probability_engine.BASE_RECOVERY_PROBABILITY)[:12]:
+            for attempt in (1, 2, 3):
+                assert probability_engine.recovery_probability(
+                    cause, action, attempt
+                ) == probability_engine.recovery_probability(
+                    cause, action, attempt, customer_multiplier=1.0
+                )
+
+    def test_probability_never_leaves_zero_to_one(self):
+        for cause, action in list(probability_engine.BASE_RECOVERY_PROBABILITY)[:12]:
+            for multiplier in (0.0, 0.5, 1.0, 1.5, 99.0):
+                value = probability_engine.recovery_probability(
+                    cause, action, 1, customer_multiplier=multiplier
+                )
+                assert 0.0 <= value <= 1.0
+
+    def test_a_hostile_multiplier_cannot_manufacture_certainty(self):
+        """No customer signal may push an action to a guaranteed recovery."""
+        cause, action = next(iter(probability_engine.BASE_RECOVERY_PROBABILITY))
+        assert (
+            probability_engine.recovery_probability(
+                cause, action, 1, customer_multiplier=1000.0
+            )
+            <= 1.0
+        )

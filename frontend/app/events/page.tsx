@@ -237,7 +237,7 @@ function EventsFeed() {
             <EmptyState hasFilters={hasFilters} onClear={clearFilters} />
           ) : (
             <Card className="overflow-hidden px-2 py-1 lg:px-0 lg:py-0">
-              <EventTable events={data.items} />
+              <EventTable events={data.items} from={type ? `type:${type}` : 'events'} />
             </Card>
           )}
         </div>

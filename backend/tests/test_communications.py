@@ -374,11 +374,34 @@ class TestListing:
         body = client.get("/communications", params={"channel": "sms"}).json()
         assert all(item["channel"] == "sms" for item in body["items"])
 
-    def test_an_empty_list_is_not_an_error(self, client_and_session):
-        client, _ = client_and_session
-        body = client.get("/communications").json()
-        assert body["total"] == 0
-        assert body["items"] == []
+    def test_an_empty_list_is_not_an_error(self):
+        """Checked on a system where nothing has run.
+
+        The shared fixture runs a batch, and a batch now records the contacts
+        the agent decided to make — so asserting emptiness there would be
+        asserting that the agent does nothing.
+        """
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from sqlalchemy.pool import StaticPool
+
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+            future=True,
+        )
+        Base.metadata.create_all(bind=engine)
+        session = sessionmaker(bind=engine, expire_on_commit=False, future=True)()
+        app.dependency_overrides[get_db] = lambda: session
+        try:
+            body = TestClient(app).get("/communications").json()
+            assert body["total"] == 0
+            assert body["items"] == []
+        finally:
+            app.dependency_overrides.clear()
+            session.close()
+            engine.dispose()
 
     def test_no_record_claims_delivery(self, client_and_session):
         client, session = client_and_session
@@ -387,3 +410,146 @@ class TestListing:
         blob = client.get("/communications").text.lower()
         for claim in ('"sent"', "delivered", "call_duration", "provider"):
             assert claim not in blob
+
+
+class TestRecoveryRunsFeedCommunications:
+    """A run must surface the people the agent decided to contact.
+
+    Before this, the batch executed contact actions but recorded nothing, so a
+    merchant had to create the contact by hand to see it — which made an
+    autonomous agent look like an address book with a send button.
+    """
+
+    def test_a_run_records_the_contacts_it_decided_to_make(self, client_and_session):
+        client, session = client_and_session
+        rows = list(session.execute(select(CommunicationLog)).scalars())
+        assert rows, "the batch decided to contact people but recorded nothing"
+
+    def test_those_contacts_appear_in_the_listing(self, client_and_session):
+        client, _ = client_and_session
+        body = client.get("/communications").json()
+        assert body["total"] > 0
+
+    def test_each_carries_the_agent_s_channel_reasoning(self, client_and_session):
+        """A merchant must be able to see WHY the agent picked that channel."""
+        client, session = client_and_session
+        for row in session.execute(select(CommunicationLog)).scalars():
+            assert row.channel_reason
+
+    def test_only_reachable_channels_are_used(self, client_and_session):
+        from app.routers.communications import CONTACT_CHANNELS
+
+        _, session = client_and_session
+        for row in session.execute(select(CommunicationLog)).scalars():
+            assert row.channel in CONTACT_CHANNELS
+
+    def test_a_run_never_claims_a_send_it_could_not_make(self, client_and_session):
+        """Compliance still gates every recorded contact: a refused one is
+        stored blocked with no body, exactly as if prepared by hand."""
+        _, session = client_and_session
+        for row in session.execute(select(CommunicationLog)).scalars():
+            if row.status == CommunicationStatus.BLOCKED:
+                assert row.body == ""
+                assert row.blocked_reason
+            else:
+                assert row.is_simulated is True
+
+    def test_recording_failure_never_fails_the_run(self, client_and_session, monkeypatch):
+        """The recovery action has already happened and is in the ledger.
+        Losing the conversation record must not throw that work away."""
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from sqlalchemy.pool import StaticPool
+
+        from app.routers import batch as batch_module
+
+        def explode(*args, **kwargs):
+            raise RuntimeError("communication log unavailable")
+
+        monkeypatch.setattr(batch_module, "_record_agent_contact", explode)
+
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+            future=True,
+        )
+        Base.metadata.create_all(bind=engine)
+        session = sessionmaker(bind=engine, expire_on_commit=False, future=True)()
+        logging.disable(logging.CRITICAL)
+        try:
+            result = batch_module.run_batch(session, BatchRequest(count=15), load_ml=False)
+        finally:
+            logging.disable(logging.NOTSET)
+            session.close()
+            engine.dispose()
+
+        assert result.processed > 0
+
+
+class TestVoiceIsGenuinelySelected:
+    """Voice must be reachable through real reasoning, not hardcoded rows.
+
+    It previously never appeared: the only action mapped to voice was rare, and
+    the batch overrode the recommender's own reasoning with the action map —
+    discarding the escalation and amount signals entirely.
+    """
+
+    def test_a_run_produces_voice_conversations(self, client_and_session):
+        _, session = client_and_session
+        channels = {
+            row.channel for row in session.execute(select(CommunicationLog)).scalars()
+        }
+        assert Channel.VOICE_SCRIPT in channels, "voice is unreachable in a normal run"
+
+    def test_voice_is_chosen_for_the_larger_amounts(self, client_and_session):
+        """A call costs more, so it should track the money — not appear at random."""
+        from app.models import RiskEvent
+
+        _, session = client_and_session
+        voice, other = [], []
+        for row in session.execute(select(CommunicationLog)).scalars():
+            event = session.get(RiskEvent, row.event_id)
+            (voice if row.channel == Channel.VOICE_SCRIPT else other).append(event.amount)
+        if voice and other:
+            assert max(voice) > min(other)
+
+    def test_every_voice_conversation_explains_itself(self, client_and_session):
+        _, session = client_and_session
+        for row in session.execute(select(CommunicationLog)).scalars():
+            if row.channel == Channel.VOICE_SCRIPT:
+                assert row.channel_reason
+                assert "_" not in row.channel_reason  # merchant language
+
+    def test_a_voice_conversation_carries_a_script(self, client_and_session):
+        """The script IS the call. Without it there is nothing to play or read."""
+        _, session = client_and_session
+        for row in session.execute(select(CommunicationLog)).scalars():
+            if row.channel == Channel.VOICE_SCRIPT and row.status != CommunicationStatus.BLOCKED:
+                assert row.body
+
+    def test_escalated_cases_get_a_call_not_another_message(self, client_and_session):
+        from app.models import RiskEvent, StoppingRuleState
+        from app.routers.communications import recommend_channel
+
+        _, session = client_and_session
+        event = next(iter(session.execute(select(RiskEvent)).scalars()))
+        state = session.get(StoppingRuleState, event.id)
+        if state is None:
+            pytest.skip("no stopping-rule state for this case")
+        original = state.escalation_level
+        try:
+            state.escalation_level = 2
+            session.flush()
+            channel, reason = recommend_channel(session, event, None)
+            assert channel == Channel.VOICE_SCRIPT
+            assert "escalated" in reason.lower()
+        finally:
+            state.escalation_level = original
+            session.flush()
+
+    def test_the_voice_filter_returns_them(self, client_and_session):
+        client, _ = client_and_session
+        body = client.get("/communications", params={"channel": "voice_script"}).json()
+        assert body["total"] > 0
+        assert all(item["channel"] == "voice_script" for item in body["items"])

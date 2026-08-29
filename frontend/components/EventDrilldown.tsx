@@ -315,6 +315,16 @@ export function EventDrilldown({ detail }: { detail: EventDetailResponse }) {
                   policy?.rule_triggered,
                 )}
               </p>
+              {/* What Revora knows about this payer, when it was strong enough
+                  to move the decision. Only shown when a real signal produced
+                  it — an empty reason means nothing in the history stood out. */}
+              {typeof latestDecision.decision_factors?.payment_likelihood_reason ===
+              'string' ? (
+                <p className="mt-1.5 text-xs leading-relaxed text-ink-muted">
+                  Revora also weighed that{' '}
+                  {String(latestDecision.decision_factors.payment_likelihood_reason)}.
+                </p>
+              ) : null}
             </div>
 
             {decisions.length > 1 ? (

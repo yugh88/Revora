@@ -42,6 +42,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import utcnow
@@ -76,7 +77,10 @@ from app.ml.diagnosis_classifier import (
     predict,
 )
 from app.models.audit_log import AuditLog
+from app.enums import PromiseStatus
 from app.models.customer_profile import CustomerProfile
+from app.models.promise_to_pay import PromiseToPay
+from app.models.risk_event import RiskEvent as _RiskEvent
 from app.models.decision import Decision
 from app.models.diagnosis import Diagnosis, MLDiagnosisPrediction
 from app.models.risk_event import RiskEvent
@@ -296,6 +300,28 @@ def decide(
     )
 
     customer = session.get(CustomerProfile, event.customer_id)
+
+    # Promise history for this customer, across every case they have had. A
+    # payer who keeps their word is a different proposition from one who does
+    # not, and the ledger already knows which is which.
+    promises_kept = 0
+    promises_broken = 0
+    try:
+        rows = session.execute(
+            select(PromiseToPay.status)
+            .join(_RiskEvent, _RiskEvent.id == PromiseToPay.event_id)
+            .where(_RiskEvent.customer_id == event.customer_id)
+        ).scalars()
+        for status in rows:
+            if status == PromiseStatus.KEPT:
+                promises_kept += 1
+            elif status == PromiseStatus.BROKEN:
+                promises_broken += 1
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "promise_history_unavailable",
+            extra={"event_id": event.id, "stage": "decision"},
+        )
     attempt_number = idempotency.next_attempt_number(session, event.id)
 
     # --- 2. ML independent check: never authoritative ----------------------
@@ -371,8 +397,26 @@ def decide(
     amount_at_risk = event.amount if event.amount is not None else Decimal("0.00")
 
     # --- 4. score, then 5. walk the ranking through the policy gate -------
+    # What is known about THIS payer tilts the scoring. Extending the existing
+    # probability rather than adding a parallel "payment prediction" the engine
+    # would then ignore — a score nothing acts on is decoration.
+    customer_multiplier, likelihood_reason = probability_engine.customer_likelihood(
+        payment_success_rate=(
+            customer.payment_success_rate if customer is not None else None
+        ),
+        avg_payment_delay_days=(
+            customer.avg_payment_delay_days if customer is not None else None
+        ),
+        promises_kept=promises_kept,
+        promises_broken=promises_broken,
+    )
+
     ranked = probability_engine.rank_actions(
-        diagnosis_result.root_cause, candidates, attempt_number, amount_at_risk
+        diagnosis_result.root_cause,
+        candidates,
+        attempt_number,
+        amount_at_risk,
+        customer_multiplier=customer_multiplier,
     )
 
     chosen: ActionScore | None = None
@@ -420,6 +464,10 @@ def decide(
         "currency": event.currency,
         "event_type": event_type.value,
         "attempt_number": attempt_number,
+        "payment_likelihood_multiplier": round(customer_multiplier, 4),
+        "payment_likelihood_reason": likelihood_reason,
+        "promises_kept": promises_kept,
+        "promises_broken": promises_broken,
         "customer_success_rate": (
             round(customer.payment_success_rate, 4) if customer is not None else None
         ),

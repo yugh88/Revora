@@ -89,7 +89,11 @@ CONTACT_CHANNELS = (Channel.EMAIL, Channel.SMS, Channel.VOICE_SCRIPT, Channel.IN
 
 
 def recommend_channel(
-    session: Session, event: RiskEvent, decision: Decision | None
+    session: Session,
+    event: RiskEvent,
+    decision: Decision | None,
+    *,
+    action: str | None = None,
 ) -> tuple[Channel, str]:
     """Choose how to reach this customer, and say why in plain language.
 
@@ -110,9 +114,10 @@ def recommend_channel(
     customer = session.get(CustomerProfile, event.customer_id)
     state = session.get(StoppingRuleState, event.id)
     escalation = int(getattr(state, "escalation_level", 0) or 0)
+    attempts = int(getattr(state, "attempts_used", 0) or 0)
 
-    action = decision.action_code if decision else None
-    implied = ACTION_CHANNEL.get(action or "")
+    chosen_action = action or (decision.action_code if decision else None)
+    implied = ACTION_CHANNEL.get(chosen_action or "")
 
     # An escalated case has already been emailed without result. Continuing to
     # email it is how recovery becomes noise.
@@ -121,6 +126,27 @@ def recommend_channel(
             Channel.VOICE_SCRIPT,
             "This case has been escalated, so Revora chose a call rather than "
             "another message.",
+        )
+
+    # A call costs more than a message, so it is reserved for the cases where
+    # the money justifies the effort — the same economics the scoring engine
+    # already applies to actions, applied to the channel.
+    #
+    # No attempts requirement: a large amount is reason enough to speak to
+    # someone rather than email them, and waiting for a cheaper attempt to fail
+    # first would just delay the call by a cooldown.
+    policy = policy_engine.resolve_policy(session, event)
+    if event.amount >= (policy.amount_threshold / 2):
+        return (
+            Channel.VOICE_SCRIPT,
+            "The amount at risk is significant, so Revora chose to speak to this "
+            "customer rather than send a message.",
+        )
+
+    if attempts >= 2:
+        return (
+            Channel.VOICE_SCRIPT,
+            "Earlier messages went unanswered, so Revora chose a call.",
         )
 
     if implied is not None and implied in CONTACT_CHANNELS:

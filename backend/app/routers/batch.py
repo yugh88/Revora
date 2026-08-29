@@ -183,6 +183,89 @@ def _unit_interval(*parts: Any) -> float:
     return int.from_bytes(digest[:8], "big") / float(1 << 64)
 
 
+def _record_agent_contact(
+    session: Session,
+    event: RiskEvent,
+    decision: Decision,
+    action: ActionCode,
+    *,
+    now: datetime,
+) -> None:
+    """Write the contact the agent decided to make.
+
+    Best-effort by design. The recovery action itself has already happened and
+    is in the ledger; failing the whole record because the conversation could
+    not be written down would throw away real work to protect a listing.
+
+    The message body comes from the same compliance-checked template engine the
+    Communications page uses, so a contact the gate refuses is recorded as
+    blocked with no text — exactly as it would be if prepared by hand.
+    """
+    try:
+        from app.engine import template_engine
+        from app.enums import CommunicationStatus
+        from app.models import (
+            CommunicationLog,
+            CustomerProfile,
+            Diagnosis,
+            StoppingRuleState,
+        )
+        from app.routers.communications import recommend_channel
+
+        # The recommender decides, with the chosen action as ONE input. It was
+        # previously overridden by the action map, which discarded its
+        # escalation and amount reasoning entirely — that is why voice
+        # conversations were never generated.
+        channel, why = recommend_channel(session, event, decision, action=action.value)
+
+        diagnosis = session.get(Diagnosis, event.id)
+        result = template_engine.generate_script(
+            event=event,
+            decision=decision,
+            diagnosis=diagnosis,
+            stopping_state=session.get(StoppingRuleState, event.id),
+            policy=policy_engine.resolve_policy(session, event),
+            customer=session.get(CustomerProfile, event.customer_id),
+            channel=channel.value,
+            now=now,
+        )
+
+        session.add(
+            CommunicationLog(
+                event_id=event.id,
+                channel=channel,
+                status=(
+                    CommunicationStatus.SIMULATED
+                    if result.compliant
+                    else CommunicationStatus.BLOCKED
+                ),
+                body=result.script if result.compliant else "",
+                reason=(
+                    diagnosis.root_cause_code.value if diagnosis else "unknown"
+                ),
+                channel_reason=why,
+                blocked_reason=None if result.compliant else result.failure_reason,
+                is_simulated=True,
+                created_at=now,
+                simulated_at=now if result.compliant else None,
+            )
+        )
+        session.flush()
+    except Exception:  # noqa: BLE001
+        # Logged with the traceback, not silently swallowed. A bare warning here
+        # once hid an ordinary NameError for a whole test run: the batch looked
+        # healthy while every contact quietly failed to be recorded.
+        logger.exception(
+            "agent_contact_not_recorded",
+            extra={
+                "event_id": event.id,
+                "stage": "execution",
+                "action": "record_contact",
+                "outcome": "skipped",
+            },
+        )
+
+
 def _simulate_contact_response(
     *, seed: int, event_id: str, attempt_number: int, action_code: str, probability: float
 ) -> bool:
@@ -671,7 +754,15 @@ def _execute_contact(
     *,
     now: datetime,
 ) -> None:
-    """A message to a customer: outcome is their response, modelled here."""
+    """A message to a customer: outcome is their response, modelled here.
+
+    The contact is also RECORDED, so the customers the agent decided to reach
+    appear in Communications by themselves. Before this, a merchant had to go
+    and create the contact manually — which made an autonomous agent look like a
+    address book with a send button.
+    """
+    _record_agent_contact(session, event, decision, action, now=now)
+
     responded = _simulate_contact_response(
         seed=seed,
         # Keyed on source_ref, NOT the stored event id. The stored id is now

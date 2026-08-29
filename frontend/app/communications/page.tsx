@@ -15,6 +15,7 @@ import {
   Play,
   Send,
   Square,
+  Volume2,
   Eye,
   ShieldX,
   Smartphone,
@@ -193,12 +194,8 @@ function Communications() {
             Recovery communications
           </h1>
           <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-ink-muted">
-            The messages Revora would send to win revenue back, and what came of each
-            conversation.
-          </p>
-          <p className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface-raised/60 px-2.5 py-1.5 text-xs text-ink-muted">
-            <ShieldX className="h-3.5 w-3.5 shrink-0 text-ink-subtle" aria-hidden="true" />
-            Demo communication — no customer is contacted.
+            The customers Revora decided to contact, why it chose them, and what came
+            of each conversation.
           </p>
         </div>
 
@@ -353,15 +350,7 @@ function Communications() {
                 onClose={() => setSelected(null)}
               />
             ) : (
-              <PrepareContact
-                busy={busy}
-                onPrepare={(eventId, chosen) =>
-                  void act(
-                    () => api.prepareCommunication(eventId, chosen),
-                    'Recovery message prepared. Nothing has been sent.',
-                  )
-                }
-              />
+              <AgentSummary data={data} />
             )}
           </div>
         </div>
@@ -448,8 +437,11 @@ function ContactDetail({
             ) : null}
           </>
         ) : (
-          <blockquote className="mt-3 rounded-lg border border-line bg-surface-raised/60 px-3.5 py-3 text-sm leading-relaxed text-ink">
+          <blockquote className="relative mt-3 rounded-lg border border-line bg-surface-raised/60 px-3.5 py-3 pr-11 text-sm leading-relaxed text-ink">
             {contact.body}
+            {contact.channel === 'voice_script' ? (
+              <SpeakerButton script={contact.body} />
+            ) : null}
           </blockquote>
         )}
 
@@ -638,6 +630,47 @@ function BlockedPreview({ eventId }: { eventId: string }) {
  * label says so — a judge hearing audio must not be able to conclude a customer
  * was rung.
  */
+/**
+ * A small speaker beside the script itself, so the play control sits where the
+ * words are rather than only in a panel further down.
+ */
+function SpeakerButton({ script }: { script: string }) {
+  const [speaking, setSpeaking] = React.useState(false);
+
+  const toggle = () => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    if (speaking) {
+      window.speechSynthesis.cancel();
+      setSpeaking(false);
+      return;
+    }
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(script);
+    utterance.lang = 'en-IN';
+    utterance.rate = 0.95;
+    utterance.onend = () => setSpeaking(false);
+    utterance.onerror = () => setSpeaking(false);
+    setSpeaking(true);
+    window.speechSynthesis.speak(utterance);
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      title="Voice demo — no call is made"
+      aria-label={speaking ? 'Stop the voice demo' : 'Play the voice demo. No call is made.'}
+      className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-lg border border-line bg-surface text-ink-muted outline-none transition-colors hover:border-line-strong hover:text-ink focus-visible:ring-2 focus-visible:ring-accent"
+    >
+      {speaking ? (
+        <Square className="h-3 w-3" aria-hidden="true" />
+      ) : (
+        <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
+      )}
+    </button>
+  );
+}
+
 function VoiceDemo({ script }: { script: string }) {
   const [speaking, setSpeaking] = React.useState(false);
   const [available, setAvailable] = React.useState(false);
@@ -726,102 +759,74 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-function PrepareContact({
-  busy,
-  onPrepare,
-}: {
-  busy: boolean;
-  onPrepare: (eventId: string, channel?: string) => void;
-}) {
-  const [cases, setCases] = React.useState<EventSummary[]>([]);
-  const [eventId, setEventId] = React.useState('');
-  const [channel, setChannel] = React.useState('email');
-
-  React.useEffect(() => {
-    api
-      .listEvents({ limit: 60 })
-      .then((body) =>
-        setCases(
-          body.items.filter(
-            (item) => item.status !== 'recovered' && item.status !== 'unrecoverable',
-          ),
-        ),
-      )
-      .catch(() => setCases([]));
-  }, []);
+/**
+ * What the agent is doing, shown instead of a contact form.
+ *
+ * The previous panel asked the merchant to pick a customer and pick a channel,
+ * which is precisely the job Revora exists to do. Deciding who needs contacting
+ * — and how — is the product; asking a person to do it turns an agent into an
+ * address book with a send button.
+ *
+ * Contacts now appear here because a recovery run created them.
+ */
+function AgentSummary({ data }: { data: CommunicationListResponse | null }) {
+  const total = data?.total ?? 0;
+  const blocked = data?.status_breakdown?.blocked ?? 0;
+  const reached = total - blocked;
 
   return (
     <Card className="sticky top-24">
       <CardHeader>
-        <CardTitle>Reach a customer</CardTitle>
+        <CardTitle>How Revora decides who to contact</CardTitle>
         <CardDescription>
-          Revora writes the message and checks it against your policy before anything
-          happens.
+          You do not pick customers or channels — Revora does, within your policy.
         </CardDescription>
       </CardHeader>
 
-      <div className="space-y-3 px-5 pb-5">
-        <label className="block">
-          <span className="text-micro uppercase text-ink-subtle">Recovery case</span>
-          <select
-            value={eventId}
-            onChange={(event) => setEventId(event.target.value)}
-            className="mt-1.5 h-9 w-full cursor-pointer rounded-lg border border-line bg-surface px-3 text-xs text-ink outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/30"
-          >
-            <option value="">Choose a customer…</option>
-            {cases.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.customer_name} — {formatInr(item.amount)} outstanding
-              </option>
-            ))}
-          </select>
-        </label>
+      <div className="px-5 pb-5">
+        <ol className="space-y-2">
+          {[
+            'A recovery run reviews every case at risk',
+            'Revora works out which ones a message would actually help',
+            'It picks the channel that suits the customer and the situation',
+            'Your policy is checked before anything is written',
+            'The conversation appears in this list',
+          ].map((step, index) => (
+            <li key={step} className="flex gap-2.5 text-xs leading-relaxed text-ink-muted">
+              <span className="tabular mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-surface-raised text-micro font-semibold text-ink-subtle">
+                {index + 1}
+              </span>
+              {step}
+            </li>
+          ))}
+        </ol>
 
-        <fieldset>
-          <legend className="text-micro uppercase text-ink-subtle">How to reach them</legend>
-          <div role="radiogroup" aria-label="Channel" className="mt-1.5 flex gap-1.5">
-            {CHANNELS.filter((c) => c.value).map((option) => {
-              const Icon = option.icon;
-              const active = option.value === channel;
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={active}
-                  onClick={() => setChannel(option.value)}
-                  className={cn(
-                    'flex flex-1 flex-col items-center gap-1 rounded-lg border px-2 py-2 text-micro transition-colors',
-                    'outline-none focus-visible:ring-2 focus-visible:ring-accent',
-                    active
-                      ? 'border-accent/40 bg-accent/[0.07] text-ink'
-                      : 'border-line text-ink-subtle hover:border-line-strong',
-                  )}
-                >
-                  <Icon className="h-3.5 w-3.5" aria-hidden="true" />
-                  {option.label}
-                </button>
-              );
-            })}
-          </div>
-        </fieldset>
+        {total > 0 ? (
+          <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-line pt-4">
+            <div>
+              <dt className="text-micro uppercase text-ink-subtle">Contacted</dt>
+              <dd className="tabular mt-0.5 text-lg font-semibold text-ink">{reached}</dd>
+            </div>
+            <div>
+              <dt className="text-micro uppercase text-ink-subtle">Held by policy</dt>
+              <dd
+                className={cn(
+                  'tabular mt-0.5 text-lg font-semibold',
+                  blocked > 0 ? 'text-pending' : 'text-ink',
+                )}
+              >
+                {blocked}
+              </dd>
+            </div>
+          </dl>
+        ) : null}
 
-        <Button
-          className="w-full"
-          disabled={!eventId || busy}
-          onClick={() => onPrepare(eventId, channel)}
-        >
-          {busy ? (
-            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-          ) : (
-            <Mail className="h-4 w-4" aria-hidden="true" />
-          )}
-          Prepare recovery message
+        <Button asChild variant="secondary" className="mt-4 w-full">
+          <Link href="/batch">Run a recovery analysis</Link>
         </Button>
 
-        <p className="text-xs leading-relaxed text-ink-subtle">
-          Preparing a message contacts nobody. If your policy does not allow this contact,
-          Revora writes nothing and tells you why.
+        <p className="mt-3 text-xs leading-relaxed text-ink-subtle">
+          Simulation only — no customer is contacted.
         </p>
       </div>
     </Card>
@@ -856,10 +861,12 @@ function EmptyState() {
       <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-line bg-surface-raised">
         <Mail className="h-5 w-5 text-ink-subtle" aria-hidden="true" />
       </span>
-      <h2 className="mt-4 text-base font-semibold text-ink">No recovery messages yet</h2>
+      <h2 className="mt-4 text-base font-semibold text-ink">
+        No conversations in this period
+      </h2>
       <p className="mt-2 max-w-md text-sm leading-relaxed text-ink-muted">
-        When Revora decides a customer should be contacted, the message it would send
-        appears here — along with whether your policy allows it.
+        Run a recovery analysis and the customers Revora decides to contact will appear
+        here, with the message it would send and whether your policy allowed it.
       </p>
     </Card>
   );

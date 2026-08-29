@@ -226,18 +226,95 @@ class ActionScore:
 
 
 def recovery_probability(
-    root_cause: RootCauseCode, action: ActionCode, attempt_number: int
+    root_cause: RootCauseCode,
+    action: ActionCode,
+    attempt_number: int,
+    *,
+    customer_multiplier: float = 1.0,
 ) -> float:
-    """P(recovery | root_cause, action, attempt_number).
+    """P(recovery | root_cause, action, attempt_number, this customer).
 
-    The hand-set base rate for the pairing, decayed by attempt number. Always
-    clamped into [0, 1].
+    The hand-set base rate for the pairing, decayed by attempt number, then
+    adjusted for what is known about this particular customer. Always clamped
+    into [0, 1].
+
+    ``customer_multiplier`` defaults to 1.0 so every existing caller behaves
+    exactly as before — the customer signal is an extension of this function,
+    not a replacement for it, and a caller with no customer data gets the same
+    answer it always did.
     """
     base = BASE_RECOVERY_PROBABILITY.get(
         (root_cause, action), DEFAULT_RECOVERY_PROBABILITY
     )
     decay = ATTEMPT_DECAY.get(attempt_number, DEFAULT_ATTEMPT_DECAY)
-    return max(0.0, min(1.0, base * decay))
+    return max(0.0, min(1.0, base * decay * customer_multiplier))
+
+
+#: How far customer history may move a base probability, either way.
+#:
+#: Bounded on purpose. History is a real signal but a noisy one, and letting it
+#: swing a probability from 0.2 to 0.9 would make the recorded base rates
+#: decorative. A third either way is enough to change which action wins without
+#: letting one feature take over the decision.
+CUSTOMER_ADJUSTMENT_RANGE = 0.33
+
+
+def customer_likelihood(
+    *,
+    payment_success_rate: float | None,
+    avg_payment_delay_days: float | None,
+    promises_kept: int = 0,
+    promises_broken: int = 0,
+) -> tuple[float, str | None]:
+    """How likely THIS customer is to pay, relative to an average one.
+
+    Returns a multiplier around 1.0 and, where a signal was strong enough to
+    matter, a sentence explaining it in words a merchant would use.
+
+    This is not a new model and not a new score to display. It exists to move
+    the probability the decision engine already uses, so that a customer who
+    always pays gets a lighter touch and one who has broken three promises does
+    not get the same cheerful reminder as everyone else.
+
+    Signals are only applied when they are actually present. A customer with no
+    history returns exactly 1.0 and no explanation — absence of evidence must
+    not be read as evidence of unreliability, or every new customer would be
+    treated as a bad one.
+    """
+    adjustment = 0.0
+    reasons: list[tuple[float, str]] = []
+
+    if payment_success_rate is not None:
+        # Centred on 0.5: better than half the time helps, worse hurts.
+        delta = (payment_success_rate - 0.5) * 0.5
+        adjustment += delta
+        if payment_success_rate >= 0.8:
+            reasons.append((abs(delta), "this customer usually pays"))
+        elif payment_success_rate <= 0.3:
+            reasons.append((abs(delta), "this customer often does not pay"))
+
+    if avg_payment_delay_days:
+        # Chronic lateness lowers the odds for THIS attempt without writing the
+        # customer off — they may well pay, just not yet.
+        if avg_payment_delay_days > 20:
+            adjustment -= 0.12
+            reasons.append((0.12, "they usually pay well after the due date"))
+        elif avg_payment_delay_days > 7:
+            adjustment -= 0.05
+
+    total_promises = promises_kept + promises_broken
+    if total_promises:
+        kept_rate = promises_kept / total_promises
+        delta = (kept_rate - 0.5) * 0.4
+        adjustment += delta
+        if promises_broken >= 2 and kept_rate < 0.5:
+            reasons.append((abs(delta), "they have broken previous payment promises"))
+        elif promises_kept >= 2 and kept_rate >= 0.75:
+            reasons.append((abs(delta), "they have kept their promises before"))
+
+    adjustment = max(-CUSTOMER_ADJUSTMENT_RANGE, min(CUSTOMER_ADJUSTMENT_RANGE, adjustment))
+    reason = max(reasons, key=lambda item: item[0])[1] if reasons else None
+    return 1.0 + adjustment, reason
 
 
 def cost(action: ActionCode) -> Decimal:
@@ -255,13 +332,22 @@ def score_action(
     action: ActionCode,
     attempt_number: int,
     amount_at_risk: Decimal,
+    *,
+    customer_multiplier: float = 1.0,
 ) -> ActionScore:
     """Evaluate Section 6's formula for one candidate action.
 
-    score = P(recovery | cause, action, attempt) x amount_at_risk
+    score = P(recovery | cause, action, attempt, customer) x amount_at_risk
             - cost(action) - annoyance_penalty(attempt)
+
+    The customer multiplier tilts the probability toward what is known about
+    this particular payer. It changes which action wins; it can never make an
+    illegal action legal, because the ranking is still walked through the policy
+    gate afterwards and the gate does the choosing.
     """
-    probability = recovery_probability(root_cause, action, attempt_number)
+    probability = recovery_probability(
+        root_cause, action, attempt_number, customer_multiplier=customer_multiplier
+    )
     action_cost = cost(action)
     penalty = annoyance_penalty(attempt_number)
 
@@ -287,6 +373,8 @@ def rank_actions(
     actions: list[ActionCode],
     attempt_number: int,
     amount_at_risk: Decimal,
+    *,
+    customer_multiplier: float = 1.0,
 ) -> list[ActionScore]:
     """Score every candidate, best first.
 
@@ -296,7 +384,13 @@ def rank_actions(
     reproducible rather than dependent on dict iteration.
     """
     scored = [
-        score_action(root_cause, action, attempt_number, amount_at_risk)
+        score_action(
+            root_cause,
+            action,
+            attempt_number,
+            amount_at_risk,
+            customer_multiplier=customer_multiplier,
+        )
         for action in actions
     ]
     return sorted(scored, key=lambda s: (-s.score, s.action.value))

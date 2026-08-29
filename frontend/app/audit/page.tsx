@@ -80,7 +80,7 @@ export default function AuditPage() {
     <AppShell>
       <main className="mx-auto max-w-[1400px] px-4 py-8 sm:px-6 lg:px-8">
         <div className="animate-fade-up">
-          <h1 className="text-2xl font-semibold tracking-tight text-ink">Activity log</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-ink">Audit</h1>
           <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-ink-muted">
             Every step Revora took on your behalf, in order and never edited — so any
             recovery can be explained after the fact.
@@ -94,7 +94,7 @@ export default function AuditPage() {
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Filter by customer or case…"
-              aria-label="Filter activity by customer or case"
+              aria-label="Filter audit records by customer or case"
               className="h-9 min-w-[220px] flex-1 rounded-lg border border-line bg-surface px-3 text-xs text-ink outline-none transition-colors placeholder:text-ink-subtle focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/30"
             />
             <label className="relative">
@@ -296,7 +296,7 @@ function EmptyState({ hasFilters }: { hasFilters: boolean }) {
         <FileClock className="h-5 w-5 text-ink-subtle" aria-hidden="true" />
       </span>
       <h2 className="mt-4 text-base font-semibold text-ink">
-        {hasFilters ? 'No activity matches these filters' : 'No activity yet'}
+        {hasFilters ? 'No audit records match these filters' : 'No audit records yet'}
       </h2>
       <p className="mt-2 max-w-md text-sm leading-relaxed text-ink-muted">
         {hasFilters
@@ -321,7 +321,7 @@ function ErrorState({ error, onRetry, busy }: { error: ApiError; onRetry: () => 
         </span>
         <div className="min-w-0 flex-1">
           <h2 className="text-sm font-semibold text-ink">
-            Your activity log could not be loaded
+            Your audit trail could not be loaded
           </h2>
           <p className="mt-1.5 text-sm leading-relaxed text-ink-muted">
             Revora did not change anything. This was a problem reading the log, not

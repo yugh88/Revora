@@ -85,7 +85,7 @@ const PRIMARY: NavGroup[] = [
   { label: 'Run Recovery', icon: PlayCircle, href: '/batch' },
   { label: 'Communications', icon: MessageSquare, href: '/communications' },
   { label: 'Recovery Messages', icon: MessageSquareText, href: '/scripts' },
-  { label: 'Activity Log', icon: FileClock, href: '/audit' },
+  { label: 'Audit', icon: FileClock, href: '/audit' },
   { label: 'Policies', icon: SlidersHorizontal, href: '/policies' },
 ];
 
@@ -228,7 +228,7 @@ function currentSection(pathname: string): string {
   if (pathname.startsWith('/promises')) return 'Promises to Pay';
   if (pathname.startsWith('/batch')) return 'Run Recovery';
   if (pathname.startsWith('/scripts')) return 'Recovery Messages';
-  if (pathname.startsWith('/audit')) return 'Activity Log';
+  if (pathname.startsWith('/audit')) return 'Audit';
   if (pathname.startsWith('/policies')) return 'Policies';
   return 'Revora';
 }

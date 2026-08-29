@@ -21,14 +21,41 @@ import type { EventDetailResponse } from '../../../lib/types';
  * so a button offering any of those would be a lie about what the product can
  * do. When such an endpoint exists, the button can be added with it.
  */
-/** Known navigation origins. Anything else falls back to Events. */
+/** Known navigation origins. Anything else falls back to All Recoveries. */
 const ORIGINS: Record<string, { href: string; label: string }> = {
-  events: { href: '/events', label: 'Back to Events' },
+  events: { href: '/events', label: 'Back to All Recoveries' },
   audit: { href: '/audit', label: 'Back to Audit' },
   scripts: { href: '/scripts', label: 'Back to Recovery Messages' },
   batch: { href: '/batch', label: 'Back to Run Recovery' },
   promises: { href: '/promises', label: 'Back to Promises to Pay' },
   communications: { href: '/communications', label: 'Back to Communications' },
+};
+
+/**
+ * Where "Back" should go.
+ *
+ * A category page passes `type:invoice_overdue`, so the case can return to
+ * Invoices & Receivables rather than dumping the merchant in the full list.
+ * Anything unrecognised falls back to All Recoveries, which is always a
+ * sensible place to be — including for a bookmark with no origin at all.
+ */
+function resolveOrigin(from: string | null): { href: string; label: string } {
+  if (!from) return ORIGINS.events;
+  if (from.startsWith('type:')) {
+    const type = from.slice(5);
+    const label = CATEGORY_LABEL[type];
+    if (label) return { href: `/events?type=${type}`, label: `Back to ${label}` };
+  }
+  return ORIGINS[from] ?? ORIGINS.events;
+}
+
+/** Sidebar names for the five recovery directions. */
+const CATEGORY_LABEL: Record<string, string> = {
+  payment_degraded: 'Payments',
+  checkout_abandoned: 'Checkout Abandonment',
+  subscription_failed: 'Subscriptions',
+  mandate_failed: 'Mandates',
+  invoice_overdue: 'Invoices & Receivables',
 };
 
 export default function EventDetailPage() {
@@ -39,7 +66,7 @@ export default function EventDetailPage() {
   // for a direct link or a bookmark, which is the only sensible default when
   // there is no origin to honour.
   const searchParams = useSearchParams();
-  const origin = ORIGINS[searchParams.get('from') ?? ''] ?? ORIGINS.events;
+  const origin = resolveOrigin(searchParams.get('from'));
 
   const [detail, setDetail] = React.useState<EventDetailResponse | null>(null);
   const [loading, setLoading] = React.useState(true);

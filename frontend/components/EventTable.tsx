@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { AlertTriangle, ChevronRight } from 'lucide-react';
 
 import { formatDateTime, formatInr, formatInrExact, formatRelative } from '../lib/api-client';
@@ -97,7 +98,16 @@ const COLUMNS: Array<{
   { key: 'chevron', label: '', width: 'w-10' },
 ];
 
-export function EventTable({ events }: { events: EventSummary[] }) {
+export function EventTable({
+  events,
+  from = 'events',
+}: {
+  events: EventSummary[];
+  /** Where a click should return to, so the case knows its origin. */
+  from?: string;
+}) {
+  const router = useRouter();
+
   return (
     <>
       {/* ---------------- Desktop: real table ---------------- */}
@@ -107,13 +117,18 @@ export function EventTable({ events }: { events: EventSummary[] }) {
             Revenue at risk. Each row opens the full recovery story.
           </caption>
           <thead>
-            <tr className="border-b border-line">
+            <tr>
               {COLUMNS.map((column) => (
                 <th
                   key={column.label || column.key}
                   scope="col"
                   className={cn(
-                    'sticky top-16 z-10 whitespace-nowrap bg-bg/95 px-4 py-2.5 text-micro font-semibold uppercase text-ink-subtle backdrop-blur',
+                    // Not sticky. It previously stuck at top-16 to sit under
+                    // the app bar, but the table scrolls inside the page rather
+                    // than the viewport, so the header floated over row one.
+                    // A plain header with real padding is correct and cannot
+                    // collide with anything.
+                    'whitespace-nowrap border-b border-line bg-surface px-4 py-3 text-micro font-semibold uppercase leading-none text-ink-subtle',
                     column.align === 'right' && 'text-right',
                     column.width,
                   )}
@@ -127,13 +142,18 @@ export function EventTable({ events }: { events: EventSummary[] }) {
             {events.map((event) => (
               <tr
                 key={event.id}
-                className="group border-b border-line/70 transition-colors last:border-0 hover:bg-surface-raised/70 focus-within:bg-surface-raised/70"
+                // §15: the WHOLE row opens the case. The anchor inside the first
+                // cell stays, so middle-click and cmd-click still work and the
+                // row is reachable from the keyboard; this handler just makes
+                // the rest of the row behave the way it looks.
+                onClick={() => router.push(`/events/${event.id}?from=${from}`)}
+                className="group cursor-pointer border-b border-line/70 transition-colors last:border-0 hover:bg-surface-raised/70 focus-within:bg-surface-raised/70"
               >
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2">
                     <NeedsReviewFlag reasons={event.review_reasons} />
                     <Link
-                      href={`/events/${event.id}?from=events`}
+                      href={`/events/${event.id}?from=${from}`}
                       className="rounded outline-none focus-visible:ring-2 focus-visible:ring-accent"
                     >
                       <span className="whitespace-nowrap text-xs font-medium text-ink group-hover:text-accent">
@@ -194,7 +214,7 @@ export function EventTable({ events }: { events: EventSummary[] }) {
         {events.map((event) => (
           <li key={event.id}>
             <Link
-              href={`/events/${event.id}?from=events`}
+              href={`/events/${event.id}?from=${from}`}
               className="block px-1 py-3 outline-none transition-colors hover:bg-surface-raised/70 focus-visible:bg-surface-raised/70"
             >
               <div className="flex items-start justify-between gap-3">
