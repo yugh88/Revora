@@ -37,6 +37,14 @@ class PromiseOut(BaseModel):
     event_type: EventType
     amount_at_risk: str
 
+    #: What the customer actually said, verbatim. A promise has to be
+    #: defensible: "why does Revora think they said 3 September?" needs an
+    #: answer that a parsed date alone cannot give.
+    source_response: str | None = None
+
+    #: What Revora will do next, in plain language.
+    next_step: str = ""
+
     #: True once the ledger records this case as recovered. Read back from the
     #: ledger rather than inferred from the promise, so the two cannot disagree.
     recovered: bool

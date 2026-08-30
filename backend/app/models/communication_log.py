@@ -98,6 +98,11 @@ class CommunicationLog(Base):
     )
     responded_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
 
+    #: The customer's reply, verbatim. Kept because a promise has to be
+    #: defensible later: "why does Revora think they said 3 September?" needs an
+    #: answer, and a parsed date alone cannot give one.
+    reply_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     #: Set when the simulated response was a commitment to pay, linking the
     #: conversation to the promise it produced.
     promise_id: Mapped[str | None] = mapped_column(

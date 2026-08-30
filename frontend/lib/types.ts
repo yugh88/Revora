@@ -491,6 +491,10 @@ export interface PromiseOut {
   event_id: string;
   event_type: EventType;
   amount_at_risk: string;
+  /** What the customer actually said, verbatim. */
+  source_response: string | null;
+  /** What Revora will do next, in plain language. */
+  next_step: string;
   /** Read back from the ledger, never inferred from the promise. */
   recovered: boolean;
   amount_recovered: string;

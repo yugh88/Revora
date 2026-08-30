@@ -57,6 +57,7 @@ from app.models.stopping_rule_state import StoppingRuleState
 RULE_DO_NOT_CONTACT = "do_not_contact"
 RULE_HARD_STOP = "hard_stop_cause"
 RULE_COOLDOWN = "cooldown_active"
+RULE_OPEN_PROMISE = "customer_promised_to_pay"
 RULE_MAX_ATTEMPTS = "max_attempts_reached"
 RULE_CONTACT_LIMIT = "contact_limit_per_channel"
 RULE_ESCALATION_CEILING = "escalation_ceiling"
@@ -179,6 +180,17 @@ def _channel_contact_count(session: Session, event_id: str, channel: str) -> int
 # --------------------------------------------------------------------------- #
 
 
+def _has_open_promise(session: Session, event: RiskEvent, moment: datetime) -> bool:
+    """Is this case waiting on a commitment the customer has not yet missed?
+
+    Imported lazily: the promise tracker reaches back into the batch router for
+    the ledger writer, and importing it at module scope would close a cycle.
+    """
+    from app.engine.promise_tracker import has_open_promise
+
+    return has_open_promise(session, event.id, now=moment)
+
+
 def evaluate(
     session: Session,
     event: RiskEvent,
@@ -206,7 +218,26 @@ def evaluate(
     if profile is not None and profile.do_not_contact and contacts_customer:
         return _block(RULE_DO_NOT_CONTACT, "customer.do_not_contact", True, False)
 
-    # --- 2. hard-stop causes: Section 6, "no retry, immediate stop" ---------
+    # --- 2. an open promise: the customer has told us when they will pay ---
+    #
+    # Chasing someone before the date they committed to is precisely how a
+    # recovery agent becomes a nuisance, and it wastes the goodwill that made
+    # them answer in the first place. Only CONTACT is paused: a gateway retry
+    # costs the customer nothing and may well succeed on its own, so a promise
+    # does not stop Revora quietly checking whether the money has arrived.
+    #
+    # The pause lifts by itself the moment the promised date passes, because
+    # has_open_promise reads the date rather than a stored flag — a broken
+    # promise resumes recovery with no sweep required.
+    if contacts_customer and _has_open_promise(session, event, moment):
+        return _block(
+            RULE_OPEN_PROMISE,
+            "promise.promised_date",
+            "in the future",
+            "must have passed before contacting again",
+        )
+
+    # --- 3. hard-stop causes: Section 6, "no retry, immediate stop" ---------
     if diagnosis.is_hard_stop and action != ActionCode.NO_ACTION:
         return _block(
             RULE_HARD_STOP,

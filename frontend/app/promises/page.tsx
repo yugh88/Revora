@@ -217,6 +217,11 @@ export default function PromisesPage() {
                           Promised for {formatDateTime(promise.promised_date)} ·{' '}
                           {caseKind(promise.event_type)}
                         </p>
+                        {promise.source_response ? (
+                          <p className="mt-1 truncate text-micro italic text-ink-muted">
+                            &ldquo;{promise.source_response}&rdquo;
+                          </p>
+                        ) : null}
                       </button>
                     </li>
                   ))}
@@ -336,6 +341,24 @@ function PromiseDetail({
             {promiseStatusMeaning(promise.status)}
           </p>
         </div>
+
+        {promise.source_response ? (
+          <div className="mt-3 rounded-lg border border-line bg-surface-raised/60 px-3 py-2.5">
+            <p className="text-micro uppercase text-ink-subtle">What the customer said</p>
+            <p className="mt-1 text-sm italic leading-relaxed text-ink">
+              &ldquo;{promise.source_response}&rdquo;
+            </p>
+          </div>
+        ) : null}
+
+        {promise.next_step ? (
+          <div className="mt-3 rounded-lg bg-surface-raised/50 px-3 py-2">
+            <p className="text-micro uppercase text-ink-subtle">What Revora will do next</p>
+            <p className="mt-0.5 text-xs leading-relaxed text-ink-muted">
+              {promise.next_step}
+            </p>
+          </div>
+        ) : null}
 
         {promise.recovered ? (
           <p className="mt-3 rounded-lg border border-recovered/25 bg-recovered/5 px-3 py-2 text-xs leading-relaxed text-ink-muted">

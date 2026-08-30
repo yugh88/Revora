@@ -288,12 +288,16 @@ class TestSimulatedResponses:
         client, session = client_and_session
         _, body = prepared(client, session)
         client.post(f"/communications/{body['id']}/simulate-send")
+        before = len(list(session.execute(select(PromiseToPay)).scalars()))
         answered = client.post(
             f"/communications/{body['id']}/simulate-response",
             json={"response": "no_response"},
         ).json()
         assert answered["promise_id"] is None
-        assert list(session.execute(select(PromiseToPay)).scalars()) == []
+        # A delta, not an absolute: the batch that populates this fixture now
+        # produces promises of its own, so an empty ledger would mean the agent
+        # had done nothing.
+        assert len(list(session.execute(select(PromiseToPay)).scalars())) == before
 
 
 class TestPromiseComesFromTheConversation:
@@ -324,13 +328,16 @@ class TestPromiseComesFromTheConversation:
         client, session = client_and_session
         _, body = prepared(client, session)
         client.post(f"/communications/{body['id']}/simulate-send")
+        before = client.get("/promises").json()
         client.post(
             f"/communications/{body['id']}/simulate-response",
             json={"response": "promised_to_pay", "promised_amount": "900.00"},
         )
-        promises = client.get("/promises").json()
-        assert promises["total"] == 1
-        assert Decimal(promises["total_promised"]) == Decimal("900.00")
+        after = client.get("/promises").json()
+        assert after["total"] == before["total"] + 1
+        assert Decimal(after["total_promised"]) - Decimal(
+            before["total_promised"]
+        ) == Decimal("900.00")
 
     def test_the_promise_defaults_to_the_whole_balance(self, client_and_session):
         client, session = client_and_session

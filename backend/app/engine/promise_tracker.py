@@ -32,6 +32,8 @@ promise page would eventually disagree and one of them would be lying.
 from __future__ import annotations
 
 import logging
+import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -352,3 +354,195 @@ def _audit(session: Session, event: RiskEvent, **kwargs) -> None:
     from app.routers.batch import audit
 
     audit(session, event, **kwargs)
+
+
+# --------------------------------------------------------------------------- #
+# Interpreting what a customer said
+# --------------------------------------------------------------------------- #
+
+#: Phrases that carry a commitment, in the registers Indian customers actually
+#: use — English, Hinglish, and Hindi transliterated into Latin script.
+_PROMISE_MARKERS = (
+    "i will pay",
+    "i'll pay",
+    "ill pay",
+    "will pay",
+    "can pay",
+    "shall pay",
+    "payment kar dunga",
+    "payment kar dungi",
+    "kar dunga",
+    "kar dungi",
+    "pay kar dunga",
+    "de dunga",
+    "bhej dunga",
+    "payment karunga",
+    "tak payment",
+    "promise to pay",
+)
+
+_PAID_MARKERS = (
+    "already paid",
+    "already done",
+    "payment done",
+    "kar diya",
+    "ho gaya",
+    "i have paid",
+    "paid it",
+)
+
+_REFUSAL_MARKERS = ("cannot pay", "can't pay", "wont pay", "won't pay", "nahi kar", "not paying")
+
+_RELATIVE_DAYS = {
+    "today": 0,
+    "aaj": 0,
+    "tomorrow": 1,
+    "kal": 1,
+    "day after tomorrow": 2,
+    "parso": 2,
+    "next week": 7,
+    "agle hafte": 7,
+    "month end": 30,
+    "mahine ke end": 30,
+}
+
+_WEEKDAYS = {
+    "monday": 0, "somvar": 0, "tuesday": 1, "mangalvar": 1, "wednesday": 2,
+    "budhvar": 2, "thursday": 3, "guruvar": 3, "friday": 4, "shukravar": 4,
+    "saturday": 5, "shanivar": 5, "sunday": 6, "ravivar": 6,
+}
+
+_MONTHS = {
+    "january": 1, "jan": 1, "february": 2, "feb": 2, "march": 3, "mar": 3,
+    "april": 4, "apr": 4, "may": 5, "june": 6, "jun": 6, "july": 7, "jul": 7,
+    "august": 8, "aug": 8, "september": 9, "sep": 9, "sept": 9, "october": 10,
+    "oct": 10, "november": 11, "nov": 11, "december": 12, "dec": 12,
+}
+
+
+@dataclass(frozen=True)
+class ResponseReading:
+    """What a customer's reply appears to mean.
+
+    ``confidence`` is deliberately coarse. This is pattern matching over a fixed
+    phrase list, not language understanding, and dressing it up with a precise
+    number would misrepresent how much it knows.
+    """
+
+    intent: str  # promise_to_pay | paid | refused | unclear
+    promised_date: datetime | None
+    confidence: float
+    original_text: str
+
+
+def interpret_response(
+    text: str, *, now: datetime | None = None
+) -> ResponseReading:
+    """Read a simulated customer reply.
+
+    Deterministic and offline. BUILD_SPEC forbids an LLM in the decision path,
+    and this sits close enough to it that the same rule applies: a model that
+    hallucinated a payment date would create a promise nobody made, and Revora
+    would then pause recovery on the strength of it.
+
+    A date is only ever returned when the text actually contains one. When
+    someone says "I'll pay soon", the intent is a promise and the date is None —
+    inventing "in three days" would be fabricating a commitment, and every
+    downstream decision would inherit that fiction.
+    """
+    moment = now or utcnow()
+    lowered = " ".join(text.lower().split())
+
+    if any(marker in lowered for marker in _PAID_MARKERS):
+        return ResponseReading("paid", None, 0.8, text)
+    if any(marker in lowered for marker in _REFUSAL_MARKERS):
+        return ResponseReading("refused", None, 0.8, text)
+    if not any(marker in lowered for marker in _PROMISE_MARKERS):
+        return ResponseReading("unclear", None, 0.0, text)
+
+    promised = _extract_date(lowered, moment)
+    # A commitment with no date is still a commitment, but it cannot be
+    # tracked to a day — so it is reported honestly and handled as ambiguous.
+    confidence = 0.85 if promised is not None else 0.4
+    return ResponseReading("promise_to_pay", promised, confidence, text)
+
+
+def _extract_date(lowered: str, now: datetime) -> datetime | None:
+    """Find a date in the text, or return None. Never guesses."""
+    for phrase, offset in _RELATIVE_DAYS.items():
+        if phrase in lowered:
+            return (now + timedelta(days=offset)).replace(
+                hour=12, minute=0, second=0, microsecond=0
+            )
+
+    # A named weekday: "on Friday", "shukravar ko".
+    for name, index in _WEEKDAYS.items():
+        if name in lowered:
+            ahead = (index - now.weekday()) % 7 or 7
+            return (now + timedelta(days=ahead)).replace(
+                hour=12, minute=0, second=0, microsecond=0
+            )
+
+    # "3 September", "3rd Sept", "September 3".
+    #
+    # Every candidate is tried rather than only the first. "pay by 3 September"
+    # offers "by 3" before "3 september", and returning on the first
+    # non-month word would throw away a date that is plainly there.
+    # Two separate passes, not one alternation. A single pattern consumes
+    # "by 3" in "pay by 3 September" and resumes past the digits, so the real
+    # date is never seen. Scanning each ordering independently avoids that.
+    candidates: list[tuple[int, str]] = [
+        (int(m.group(1)), m.group(2))
+        for m in re.finditer(r"(\d{1,2})\s*(?:st|nd|rd|th)?\s+([a-z]+)", lowered)
+    ]
+    candidates += [
+        (int(m.group(2)), m.group(1))
+        for m in re.finditer(r"([a-z]+)\s+(\d{1,2})\b", lowered)
+    ]
+
+    for day, month_word in candidates:
+        month = _MONTHS.get(month_word)
+        if not month or not 1 <= day <= 31:
+            continue
+        try:
+            candidate = now.replace(
+                year=now.year, month=month, day=day, hour=12, minute=0,
+                second=0, microsecond=0,
+            )
+        except ValueError:
+            continue
+        # A date already past means next year — nobody promises backwards.
+        if candidate < now:
+            try:
+                candidate = candidate.replace(year=now.year + 1)
+            except ValueError:
+                continue
+        return candidate
+
+    # "in 3 days", "3 din mein"
+    match = re.search(r"(?:in|within)\s+(\d{1,2})\s+days?|(\d{1,2})\s+din", lowered)
+    if match:
+        days = int(match.group(1) or match.group(2))
+        if 0 < days <= 90:
+            return (now + timedelta(days=days)).replace(
+                hour=12, minute=0, second=0, microsecond=0
+            )
+
+    return None
+
+
+def has_open_promise(session: Session, event_id: str, *, now: datetime | None = None) -> bool:
+    """Is this case waiting on a commitment the customer has not yet missed?
+
+    Used by the recovery engine to hold off. Chasing someone who has told you
+    when they will pay, before that date arrives, is exactly the behaviour a
+    recovery agent has to avoid to stay welcome.
+    """
+    moment = now or utcnow()
+    promise = session.execute(
+        select(PromiseToPay).where(
+            PromiseToPay.event_id == event_id,
+            PromiseToPay.status == PromiseStatus.PENDING,
+        )
+    ).scalars().first()
+    return promise is not None and promise.promised_date >= moment

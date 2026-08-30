@@ -266,6 +266,119 @@ def _record_agent_contact(
         )
 
 
+#: The replies a simulated customer can give, in the registers real Indian
+#: customers actually use. Chosen deterministically per case, so a run is
+#: reproducible and a promise does not depend on anyone clicking anything.
+#:
+#: The mix is weighted rather than uniform. A uniform draw over nine options put
+#: half the customers on "ok" and produced almost no promises, which made the
+#: promise lifecycle undemonstrable. These weights are a plausible campaign
+#: response profile — a minority commit to a date, some refuse outright, some
+#: have already paid, and the largest group says something that carries no
+#: commitment at all. Deliberately not flattering: most contacts still lead
+#: nowhere, which is what recovery actually looks like.
+_CUSTOMER_REPLIES: tuple[tuple[str, int], ...] = (
+    ("Main kal payment kar dunga", 6),
+    ("3 September tak payment kar dunga", 6),
+    ("I will pay by 5 September", 6),
+    ("I can pay on Friday", 6),
+    ("payment kar dunga shukravar ko", 5),
+    ("I will pay in 3 days", 5),
+    ("I will pay soon", 4),          # a commitment with no date: no promise
+    ("Sorry, I cannot pay right now", 8),
+    ("Payment already done", 5),
+    ("ok", 12),
+    ("", 37),                        # said nothing at all
+)
+
+#: Flattened once at import so selection is a single modulo.
+_REPLY_POOL: tuple[str, ...] = tuple(
+    text for text, weight in _CUSTOMER_REPLIES for _ in range(weight)
+)
+
+
+def _simulate_customer_reply(
+    session: Session,
+    event: RiskEvent,
+    decision: Decision,
+    seed: int,
+    attempt_number: int,
+    *,
+    now: datetime,
+) -> None:
+    """Let the customer answer, and act on what they said.
+
+    This is what closes the loop. A run previously created conversations and
+    stopped there, so no promise could ever arise from one and /promises stayed
+    empty no matter how many recoveries were run.
+
+    Which customers reply, and what they say, is derived from the seed — so a
+    run is reproducible and nobody has to click through a demo to produce a
+    promise.
+
+    The reply is READ, never invented: :func:`interpret_response` extracts a date
+    only when the text contains one, and a commitment with no date produces no
+    promise rather than a guessed one.
+    """
+    try:
+        from app.engine.promise_tracker import PromiseError, create_promise, interpret_response
+        from app.enums import CommunicationStatus, CustomerResponse
+        from app.models import CommunicationLog
+
+        contact = session.execute(
+            select(CommunicationLog)
+            .where(
+                CommunicationLog.event_id == event.id,
+                CommunicationLog.status == CommunicationStatus.SIMULATED,
+            )
+            .order_by(CommunicationLog.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if contact is None or contact.customer_response is not None:
+            return  # nothing was sent, or this conversation already has a reply
+
+        digest = hashlib.sha256(
+            f"{seed}:reply:{event.source_ref or event.id}:{attempt_number}".encode()
+        ).digest()
+        text = _REPLY_POOL[digest[1] % len(_REPLY_POOL)]
+        if not text:
+            return  # the customer did not answer at all
+        reading = interpret_response(text, now=now)
+
+        contact.customer_response = {
+            "promise_to_pay": CustomerResponse.PROMISED_TO_PAY,
+            "paid": CustomerResponse.PAID,
+        }.get(reading.intent, CustomerResponse.NO_RESPONSE)
+        contact.responded_at = now
+        contact.reply_text = text
+
+        if reading.intent != "promise_to_pay" or reading.promised_date is None:
+            # A commitment with no date cannot be tracked to a day. Recording the
+            # reply is honest; manufacturing a date to make the demo richer is not.
+            session.flush()
+            return
+
+        try:
+            promise = create_promise(
+                session,
+                event,
+                promised_amount=event.amount,
+                promised_date=reading.promised_date,
+                now=now,
+            )
+            contact.promise_id = promise.id
+        except PromiseError:
+            # An open promise already exists, or the case is closed. Both are
+            # correct refusals, not failures.
+            pass
+        session.flush()
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "customer_reply_not_simulated",
+            extra={"event_id": event.id, "stage": "verification", "action": "simulate_reply"},
+        )
+
+
 def _simulate_contact_response(
     *, seed: int, event_id: str, attempt_number: int, action_code: str, probability: float
 ) -> bool:
@@ -762,6 +875,8 @@ def _execute_contact(
     address book with a send button.
     """
     _record_agent_contact(session, event, decision, action, now=now)
+
+    _simulate_customer_reply(session, event, decision, seed, attempt_number, now=now)
 
     responded = _simulate_contact_response(
         seed=seed,

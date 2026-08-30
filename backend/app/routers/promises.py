@@ -38,8 +38,23 @@ logger = logging.getLogger("revora.promises")
 router = APIRouter(tags=["promises"])
 
 
+#: What Revora does next, keyed on the state a merchant can see.
+_NEXT_STEP = {
+    "promised": "Recovery is paused until the promised date.",
+    "due_soon": "Revora will check for the payment on the promised date.",
+    "fulfilled": "Nothing further — the payment arrived and was verified.",
+    "overdue": "Recovery has resumed. Revora will choose the next action.",
+    "cancelled": "Nothing further — the promise was withdrawn.",
+}
+
+
 def _to_out(session: Session, promise: PromiseToPay) -> PromiseOut:
+    from app.models import CommunicationLog
+
     event = session.get(RiskEvent, promise.event_id)
+    source = session.execute(
+        select(CommunicationLog).where(CommunicationLog.promise_id == promise.id)
+    ).scalars().first()
     outcome = session.get(Outcome, promise.event_id)
     raw = event.raw_signal if event and isinstance(event.raw_signal, dict) else {}
     name = raw.get("customer_name") or (event.customer_id if event else "Customer")
@@ -53,6 +68,8 @@ def _to_out(session: Session, promise: PromiseToPay) -> PromiseOut:
         created_at=promise.created_at.isoformat(),
         resolved_at=promise.resolved_at.isoformat() if promise.resolved_at else None,
         status=display_status(promise),
+        source_response=source.reply_text if source else None,
+        next_step=_NEXT_STEP.get(display_status(promise), ""),
         event_id=promise.event_id,
         event_type=event.type,  # type: ignore[union-attr]
         amount_at_risk=str(event.amount) if event else "0.00",

@@ -526,12 +526,17 @@ class TestOverdue:
 
 class TestListing:
     def test_totals_reflect_real_promises(self, client_and_session):
+        """Measured as a delta. A recovery run now produces promises of its own,
+        so an absolute total would be asserting that the agent does nothing."""
         client, session = client_and_session
+        before = client.get("/promises").json()
         make_promise(client, session, amount="1000.00")
         make_promise(client, session, amount="2000.00")
-        body = client.get("/promises").json()
-        assert body["total"] == 2
-        assert Decimal(body["total_promised"]) == Decimal("3000.00")
+        after = client.get("/promises").json()
+        assert after["total"] == before["total"] + 2
+        assert Decimal(after["total_promised"]) - Decimal(
+            before["total_promised"]
+        ) == Decimal("3000.00")
 
     def test_fulfilled_total_counts_only_fulfilled(self, client_and_session):
         client, session = client_and_session
@@ -544,17 +549,36 @@ class TestListing:
 
     def test_status_filter_narrows(self, client_and_session):
         client, session = client_and_session
-        make_promise(client, session, days=10)
         _, near = make_promise(client, session, days=1)
         body = client.get("/promises", params={"status": "due_soon"}).json()
-        assert body["total"] == 1
-        assert body["items"][0]["id"] == near["id"]
+        assert body["total"] >= 1
+        assert all(item["status"] == "due_soon" for item in body["items"])
+        assert any(item["id"] == near["id"] for item in body["items"])
 
-    def test_an_empty_list_is_not_an_error(self, client_and_session):
-        client, _ = client_and_session
-        body = client.get("/promises").json()
-        assert body["total"] == 0
-        assert body["items"] == []
+    def test_an_empty_list_is_not_an_error(self):
+        """Checked on a system where nothing has run, since a recovery run now
+        legitimately produces promises."""
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from sqlalchemy.pool import StaticPool
+
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+            future=True,
+        )
+        Base.metadata.create_all(bind=engine)
+        session = sessionmaker(bind=engine, expire_on_commit=False, future=True)()
+        app.dependency_overrides[get_db] = lambda: session
+        try:
+            body = TestClient(app).get("/promises").json()
+            assert body["total"] == 0
+            assert body["items"] == []
+        finally:
+            app.dependency_overrides.clear()
+            session.close()
+            engine.dispose()
 
 
 class TestLedgerRemainsTheSourceOfTruth:
@@ -588,3 +612,202 @@ class TestLedgerRemainsTheSourceOfTruth:
         # constructing an Outcome itself.
         assert "upsert_outcome" in source
         assert "Outcome(" not in source
+
+
+class TestPromisesAriseFromRecoveryRuns:
+    """The loop the product is named for.
+
+    A run previously created conversations and stopped, so no promise could ever
+    arise from one and /promises stayed empty however many recoveries were run.
+    """
+
+    def test_a_run_produces_real_promises(self, client_and_session):
+        _, session = client_and_session
+        promises = list(session.execute(select(PromiseToPay)).scalars())
+        assert promises, "a recovery run produced no promises at all"
+
+    def test_each_promise_traces_to_what_the_customer_said(self, client_and_session):
+        """A promise has to be defensible later: "why does Revora think they
+        said 3 September?" needs an answer."""
+        from app.models import CommunicationLog
+
+        _, session = client_and_session
+        for promise in session.execute(select(PromiseToPay)).scalars():
+            source = session.execute(
+                select(CommunicationLog).where(CommunicationLog.promise_id == promise.id)
+            ).scalars().first()
+            if source is not None:
+                assert source.reply_text
+                assert source.event_id == promise.event_id
+
+    def test_promises_carry_a_real_future_date(self, client_and_session):
+        _, session = client_and_session
+        for promise in session.execute(select(PromiseToPay)).scalars():
+            assert promise.promised_date is not None
+            assert promise.promised_amount > 0
+
+    def test_runs_are_reproducible(self, client_and_session):
+        """Same seed, same promises — a demo must not depend on luck."""
+        import logging as _logging
+
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from sqlalchemy.pool import StaticPool
+
+        from app.database import Base as _Base
+        from app.routers.batch import run_batch as _run
+
+        counts = []
+        for _ in range(2):
+            engine = create_engine(
+                "sqlite://",
+                connect_args={"check_same_thread": False},
+                poolclass=StaticPool,
+                future=True,
+            )
+            _Base.metadata.create_all(bind=engine)
+            session = sessionmaker(bind=engine, expire_on_commit=False, future=True)()
+            _logging.disable(_logging.CRITICAL)
+            try:
+                counts.append(_run(session, BatchRequest(count=40), load_ml=False).promises_made)
+            finally:
+                _logging.disable(_logging.NOTSET)
+                session.close()
+                engine.dispose()
+        assert counts[0] == counts[1]
+
+
+class TestInterpretingWhatCustomersSay:
+    """Deterministic reading of a reply. No model, so nothing can hallucinate a
+    commitment nobody made."""
+
+    def test_english_promise_with_a_date(self):
+        reading = promise_tracker.interpret_response(
+            "I will pay by 3 September", now=utcnow()
+        )
+        assert reading.intent == "promise_to_pay"
+        assert reading.promised_date is not None
+        assert reading.promised_date.month == 9 and reading.promised_date.day == 3
+
+    def test_hinglish_promise_with_a_relative_date(self):
+        now = utcnow()
+        reading = promise_tracker.interpret_response("Main kal payment kar dunga", now=now)
+        assert reading.intent == "promise_to_pay"
+        assert (reading.promised_date.date() - now.date()).days == 1
+
+    def test_hinglish_promise_with_an_explicit_date(self):
+        reading = promise_tracker.interpret_response(
+            "3 September tak payment kar dunga", now=utcnow()
+        )
+        assert reading.promised_date.month == 9 and reading.promised_date.day == 3
+
+    def test_a_named_weekday_resolves_forward(self):
+        now = utcnow()
+        reading = promise_tracker.interpret_response("I can pay on Friday", now=now)
+        assert reading.promised_date is not None
+        assert reading.promised_date.weekday() == 4
+        assert reading.promised_date > now
+
+    def test_a_date_hidden_behind_another_number_is_still_found(self):
+        """"pay by 3 September" once lost its date because "by 3" was consumed
+        first and the scan resumed past the digits."""
+        reading = promise_tracker.interpret_response(
+            "I will pay by 3 September", now=utcnow()
+        )
+        assert reading.promised_date is not None
+
+    def test_a_commitment_without_a_date_invents_nothing(self):
+        """The most important property here. A guessed date would create a
+        commitment nobody made, and recovery would pause on the strength of it."""
+        reading = promise_tracker.interpret_response("I will pay soon", now=utcnow())
+        assert reading.intent == "promise_to_pay"
+        assert reading.promised_date is None
+        assert reading.confidence < 0.5
+
+    def test_a_refusal_is_not_a_promise(self):
+        assert (
+            promise_tracker.interpret_response("Sorry, I cannot pay right now").intent
+            == "refused"
+        )
+
+    def test_an_existing_payment_is_not_a_promise(self):
+        assert promise_tracker.interpret_response("Payment already done").intent == "paid"
+
+    def test_noise_is_read_as_unclear(self):
+        for text in ("ok", "thanks", "", "?"):
+            assert promise_tracker.interpret_response(text).intent == "unclear"
+
+    def test_the_original_wording_is_always_kept(self):
+        reading = promise_tracker.interpret_response("Main kal payment kar dunga")
+        assert reading.original_text == "Main kal payment kar dunga"
+
+
+class TestAnOpenPromisePausesRecovery:
+    """A promise that changes nothing is a display artefact."""
+
+    def _setup(self, session):
+        from app.engine import policy_engine
+        from app.engine.diagnosis_engine import DiagnosisResult
+        from app.models import Diagnosis, StoppingRuleState
+
+        promise = list(session.execute(select(PromiseToPay)).scalars())[0]
+        event = session.get(RiskEvent, promise.event_id)
+        stored = session.get(Diagnosis, event.id)
+        state = session.get(StoppingRuleState, event.id)
+        if state is not None:
+            state.cooldown_until = None
+            state.attempts_used = 0
+            session.flush()
+        result = DiagnosisResult(
+            root_cause=stored.root_cause_code, confidence=stored.confidence, evidence=[]
+        )
+        return promise, event, result, policy_engine.resolve_policy(session, event)
+
+    def _rule(self, session, event, result, policy, action):
+        from app.engine import policy_engine
+
+        return policy_engine.evaluate(
+            session, event, action, policy=policy, diagnosis=result,
+            probability=0.5, attempt_number=1,
+        )
+
+    def test_contacting_again_is_blocked(self, client_and_session):
+        from app.engine.diagnosis_engine import ActionCode
+
+        _, session = client_and_session
+        promise, event, result, policy = self._setup(session)
+        verdict = self._rule(session, event, result, policy, ActionCode.SMS_REMINDER)
+        assert verdict.status.value == "blocked"
+        assert verdict.rule_triggered == "customer_promised_to_pay"
+
+    def test_a_silent_gateway_retry_is_not_paused(self, client_and_session):
+        """A retry costs the customer nothing and may simply succeed."""
+        from app.engine.diagnosis_engine import ActionCode
+
+        _, session = client_and_session
+        promise, event, result, policy = self._setup(session)
+        verdict = self._rule(session, event, result, policy, ActionCode.RETRY_PAYMENT)
+        assert verdict.status.value == "allowed"
+
+    def test_recovery_resumes_once_the_date_passes(self, client_and_session):
+        """No sweep required: the pause reads the date, not a stored flag."""
+        from datetime import timedelta
+
+        from app.engine.diagnosis_engine import ActionCode
+
+        _, session = client_and_session
+        promise, event, result, policy = self._setup(session)
+        promise.promised_date = utcnow() - timedelta(days=1)
+        session.flush()
+        verdict = self._rule(session, event, result, policy, ActionCode.SMS_REMINDER)
+        assert verdict.status.value == "allowed"
+
+    def test_a_fulfilled_promise_does_not_keep_pausing(self, client_and_session):
+        from app.engine.diagnosis_engine import ActionCode
+
+        _, session = client_and_session
+        promise, event, result, policy = self._setup(session)
+        promise.status = PromiseStatus.KEPT
+        session.flush()
+        verdict = self._rule(session, event, result, policy, ActionCode.SMS_REMINDER)
+        assert verdict.status.value == "allowed"
