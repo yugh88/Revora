@@ -34,9 +34,9 @@ LANG_EDGE = "#8b5cf6"
 DATA = "#fef3c7"
 DATA_EDGE = "#d97706"
 
-fig, ax = plt.subplots(figsize=(16, 11.5))
+fig, ax = plt.subplots(figsize=(16, 13.4))
 ax.set_xlim(0, 100)
-ax.set_ylim(0, 74)
+ax.set_ylim(0, 86)
 ax.axis("off")
 fig.patch.set_facecolor("white")
 
@@ -53,6 +53,30 @@ def band(y, height, label, colour):
     # below it. Overlaying the two made the labels unreadable.
     ax.text(3.4, y + height - 1.1, label, fontsize=10.5, color=MUTED,
             weight="bold", va="top", zorder=1)
+
+
+def polyline(points, colour=MUTED, lw=1.8, dashed=False, label="", label_at=None):
+    """Route a connection through explicit waypoints.
+
+    Long links are drawn in the gaps BETWEEN bands rather than across them. A
+    line that passes through three unrelated boxes on its way somewhere is
+    worse than no line: a reader cannot tell what it actually connects.
+    """
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    ax.plot(xs, ys, color=colour, linewidth=lw,
+            linestyle="--" if dashed else "-",
+            solid_capstyle="round", zorder=4)
+    ax.annotate(
+        "", xy=points[-1], xytext=points[-2],
+        arrowprops=dict(arrowstyle="-|>", color=colour, linewidth=lw,
+                        shrinkA=0, shrinkB=2),
+        zorder=4,
+    )
+    if label and label_at:
+        ax.text(label_at[0], label_at[1], label, fontsize=7.6, color=MUTED,
+                style="italic", ha="center", zorder=6,
+                bbox=dict(facecolor="white", edgecolor="none", alpha=0.9, pad=1.4))
 
 
 def box(x, y, w, h, title, subtitle="", face=UI, edge=UI_EDGE, bold=True, fs=10):
@@ -73,28 +97,41 @@ def box(x, y, w, h, title, subtitle="", face=UI, edge=UI_EDGE, bold=True, fs=10)
                 fontsize=fs, weight="bold" if bold else "normal", color=INK, zorder=3)
 
 
-def arrow(x1, y1, x2, y2, colour=MUTED, style="-|>", lw=1.7, dashed=False, label=""):
+def arrow(
+    x1, y1, x2, y2, colour=MUTED, style="-|>", lw=1.7, dashed=False,
+    label="", elbow=None, label_at=None,
+):
+    """Draw a connection.
+
+    ``elbow`` takes a matplotlib connectionstyle. Long links are routed as
+    right angles rather than diagonals: a diagonal across four bands passes
+    through boxes it has nothing to do with, and a reader cannot tell which
+    ones it is actually connecting.
+    """
     ax.annotate(
         "", xy=(x2, y2), xytext=(x1, y1),
         arrowprops=dict(
             arrowstyle=style, color=colour, linewidth=lw,
             linestyle="--" if dashed else "-",
-            shrinkA=3, shrinkB=3, connectionstyle="arc3,rad=0",
+            shrinkA=3, shrinkB=3,
+            connectionstyle=elbow or "arc3,rad=0",
         ),
         zorder=4,
     )
     if label:
-        ax.text((x1 + x2) / 2 + 1.2, (y1 + y2) / 2, label, fontsize=7.6,
-                color=MUTED, style="italic", zorder=5)
+        lx, ly = label_at or ((x1 + x2) / 2 + 1.2, (y1 + y2) / 2)
+        ax.text(lx, ly, label, fontsize=7.6, color=MUTED, style="italic",
+                zorder=6, bbox=dict(facecolor="white", edgecolor="none",
+                                    alpha=0.85, pad=1.2))
 
 
 # ---------------------------------------------------------------- title
-ax.text(2, 72.4, "Revora", fontsize=25, weight="bold", color=INK)
-ax.text(15.2, 72.9, "autonomous revenue recovery", fontsize=12.5, color=MUTED, style="italic")
-ax.text(2, 70.2, "Razorpay Buildathon · Track 03", fontsize=9.5, color=MUTED)
+ax.text(2, 84.4, "Revora", fontsize=25, weight="bold", color=INK)
+ax.text(15.2, 84.9, "autonomous revenue recovery", fontsize=12.5, color=MUTED, style="italic")
+ax.text(2, 82.2, "Razorpay Buildathon · Track 03", fontsize=9.5, color=MUTED)
 
 # ---------------------------------------------------------------- interface
-band(59.5, 9.4, "INTERFACE   Next.js 14 · React · TypeScript · Tailwind", UI)
+band(71.5, 9.4, "INTERFACE   Next.js 14 · React · TypeScript · Tailwind", UI)
 for i, (t, sub) in enumerate([
     ("Overview", "recovered · trend"),
     ("Recovery", "cases + detail"),
@@ -103,10 +140,10 @@ for i, (t, sub) in enumerate([
     ("Audit", "every step"),
     ("Run Recovery", "dry-run console"),
 ]):
-    box(4 + i * 15.5, 60.6, 14, 5.4, t, sub, UI, UI_EDGE, fs=9.5)
+    box(4 + i * 15.5, 72.6, 14, 5.4, t, sub, UI, UI_EDGE, fs=9.5)
 
 # ---------------------------------------------------------------- api
-band(48.4, 9.4, "API   FastAPI · Pydantic · Uvicorn", API)
+band(60.4, 9.4, "API   FastAPI · Pydantic · Uvicorn", API)
 for i, (t, sub) in enumerate([
     ("/events", "cases + money"),
     ("/batch", "runs · dry-run"),
@@ -115,65 +152,101 @@ for i, (t, sub) in enumerate([
     ("/reports", "recovery · audit"),
     ("/notifications", "derived alerts"),
 ]):
-    box(4 + i * 15.5, 49.5, 14, 5.4, t, sub, API, API_EDGE, fs=9.5)
+    box(4 + i * 15.5, 61.5, 14, 5.4, t, sub, API, API_EDGE, fs=9.5)
 
-arrow(50, 60.6, 50, 55.2, UI_EDGE, lw=2.2, label="  polls every 5s")
+arrow(50, 72.6, 50, 67.2, UI_EDGE, lw=2.2, label="  polls every 5s")
 
 # ---------------------------------------------------------------- engine
-band(28.2, 19.4, "RECOVERY ENGINE   deterministic · authoritative", ENGINE)
+band(40.2, 19.4, "RECOVERY ENGINE   deterministic · authoritative", ENGINE)
 
-box(4, 39.4, 20, 5.4, "1 · Diagnose", "rules decide", ENGINE, ENGINE_EDGE)
-box(26.5, 39.4, 20, 5.4, "2 · Decide", "expected value", ENGINE, ENGINE_EDGE)
-box(49, 39.4, 20, 5.4, "ML classifier", "advisory · recorded", "#f3f4f6", "#9ca3af", fs=9.5)
-box(71.5, 39.4, 24.5, 5.4, "Stopping rules", "attempts · cooldown · caps", ENGINE, ENGINE_EDGE, fs=9.5)
+box(4, 51.4, 20, 5.4, "1 · Diagnose", "rules decide", ENGINE, ENGINE_EDGE)
+box(26.5, 51.4, 20, 5.4, "2 · Decide", "expected value", ENGINE, ENGINE_EDGE)
+box(49, 51.4, 20, 5.4, "ML classifier", "advisory · recorded", "#f3f4f6", "#9ca3af", fs=9.5)
+box(71.5, 51.4, 24.5, 5.4, "Stopping rules", "attempts · cooldown · caps", ENGINE, ENGINE_EDGE, fs=9.5)
 
-box(4, 30.2, 65, 7.0, "3 · POLICY GATE", "merchant limits · overrides everything above", GATE, GATE_EDGE, fs=13)
-box(71.5, 30.2, 24.5, 7.0, "State machine", "terminal is terminal", ENGINE, ENGINE_EDGE, fs=9.5)
+box(4, 42.2, 65, 7.0, "3 · POLICY GATE", "merchant limits · overrides everything above", GATE, GATE_EDGE, fs=13)
+box(71.5, 42.2, 24.5, 7.0, "State machine", "terminal is terminal", ENGINE, ENGINE_EDGE, fs=9.5)
 
-arrow(14, 49.5, 14, 44.8, API_EDGE, lw=2.2)
-arrow(24, 42.1, 26.5, 42.1, MUTED)
-arrow(49, 42.1, 46.5, 42.1, "#9ca3af", dashed=True, lw=1.3)
-arrow(36, 39.4, 36, 37.2, MUTED, lw=2.2)
+arrow(14, 61.5, 14, 56.8, API_EDGE, lw=2.2)
+arrow(24, 54.1, 26.5, 54.1, MUTED)
+arrow(49, 54.1, 46.5, 54.1, "#9ca3af", dashed=True, lw=1.3)
+arrow(36, 51.4, 36, 49.2, MUTED, lw=2.2)
 
 # ---------------------------------------------------------------- language
-band(16.4, 11.0, "LANGUAGE   wording only · no authority", LANG)
-box(4, 17.6, 21, 6.4, "Template engine", "YAML + compliance gate", LANG, LANG_EDGE, fs=9.5)
-box(28, 17.6, 21, 6.4, "Retrieval (RAG)", "customer-isolated", LANG, LANG_EDGE, fs=9.5)
-box(52, 17.6, 21, 6.4, "Hinglish LLM", "Ollama · Mistral", LANG, LANG_EDGE, fs=9.5)
-box(76, 17.6, 20, 6.4, "LangGraph", "orchestration", LANG, LANG_EDGE, fs=9.5)
+# Wording only. Nothing in this band decides anything, contacts anyone, or
+# records money — which is why no arrow leaves it for the ledger or for
+# Promises. It hands finished TEXT to the execution stage below.
+band(28.6, 11.0, "LANGUAGE   wording only · no authority", LANG)
+box(4, 29.8, 26, 6.4, "Template engine", "YAML + compliance gate", LANG, LANG_EDGE, fs=9.5)
+box(33, 29.8, 26, 6.4, "Retrieval (RAG)", "customer-isolated context", LANG, LANG_EDGE, fs=9.5)
+box(62, 29.8, 26, 6.4, "Hinglish LLM", "Ollama · Mistral · rewrites wording", LANG, LANG_EDGE, fs=9.5)
 
-arrow(14.5, 30.2, 14.5, 24.4, GATE_EDGE, lw=2.2, label="  approved actions only")
-arrow(25, 20.8, 28, 20.8, MUTED)
-arrow(49, 20.8, 52, 20.8, MUTED, dashed=True, label=" context")
+arrow(14.5, 42.2, 14.5, 36.6, GATE_EDGE, lw=2.2, label="  approved action only")
+arrow(30, 33.0, 33, 33.0, MUTED)
+arrow(59, 33.0, 62, 33.0, MUTED, dashed=True, label=" context")
+
+# ---------------------------------------------------------------- execution
+# Where anything actually HAPPENS. Promises are born here, from a customer's
+# reply — never from the language layer, which only chose the words.
+band(15.4, 11.4, "EXECUTION & VERIFICATION   the only stage that acts", "#ecfdf5")
+box(4, 16.6, 21, 6.4, "Communication", "simulated · nothing sent", "#ecfdf5", ENGINE_EDGE, fs=9.5)
+box(28, 16.6, 21, 6.4, "Customer response", "simulated reply", "#ecfdf5", ENGINE_EDGE, fs=9.5)
+box(52, 16.6, 21, 6.4, "Payment action", "retry · await · verify", "#ecfdf5", ENGINE_EDGE, fs=9.5)
+box(76, 16.6, 20, 6.4, "Outcome", "recovered · pending · lost", "#ecfdf5", ENGINE_EDGE, fs=9.5)
+
+polyline([(75, 29.8), (75, 27.7), (14.5, 27.7), (14.5, 23.0)],
+         colour=LANG_EDGE, lw=1.8,
+         label="finished wording", label_at=(45, 28.3))
+polyline([(66, 42.2), (66, 37.4), (94, 37.4), (94, 26.2), (62.5, 26.2), (62.5, 23.0)],
+         colour=GATE_EDGE, lw=1.8,
+         label="permitted action", label_at=(94, 31.0))
+arrow(25, 19.8, 28, 19.8, MUTED)
+arrow(73, 19.8, 76, 19.8, MUTED)
 
 # ---------------------------------------------------------------- data
-band(4.4, 11.0, "DATA   source of truth", DATA)
-box(4, 5.6, 21, 6.4, "Recovery ledger", "integer paise", DATA, DATA_EDGE, fs=9.5)
-box(28, 5.6, 21, 6.4, "Audit trail", "append-only", DATA, DATA_EDGE, fs=9.5)
-box(52, 5.6, 21, 6.4, "Promises", "commitment lifecycle", DATA, DATA_EDGE, fs=9.5)
-box(76, 5.6, 20, 6.4, "Redis", "optional · locks only", "#f3f4f6", "#9ca3af", fs=9.5)
+band(3.4, 11.0, "DATA   source of truth", DATA)
+box(4, 4.6, 21, 6.4, "Recovery ledger", "integer paise", DATA, DATA_EDGE, fs=9.5)
+box(28, 4.6, 21, 6.4, "Promises", "commitment lifecycle", DATA, DATA_EDGE, fs=9.5)
+box(52, 4.6, 21, 6.4, "Audit trail", "append-only", DATA, DATA_EDGE, fs=9.5)
+box(76, 4.6, 20, 6.4, "Redis", "optional · locks only", "#f3f4f6", "#9ca3af", fs=9.5)
 
-arrow(14.5, 17.6, 14.5, 12.0, LANG_EDGE)
-arrow(62.5, 17.6, 62.5, 12.0, LANG_EDGE)
-arrow(90, 49.5, 90, 12.0, DATA_EDGE, dashed=True, lw=1.3)
-ax.text(90.6, 27, "reads", fontsize=7.6, color=MUTED, style="italic", rotation=90)
+# The ledger records EXECUTION outcomes, not anything the language layer made.
+polyline([(86, 16.6), (86, 14.9), (14.5, 14.9), (14.5, 11.0)],
+         colour=DATA_EDGE, lw=2.0,
+         label="verified outcome", label_at=(50, 15.5))
+# A promise comes from what the customer SAID, not from the LLM.
+arrow(38.5, 16.6, 38.5, 11.0, ENGINE_EDGE, lw=2.0,
+      label="stated a date", label_at=(39.6, 13.6))
+arrow(62.5, 16.6, 62.5, 11.0, MUTED, dashed=True, lw=1.4,
+      label="every step", label_at=(63.6, 13.6))
+arrow(90, 61.5, 90, 11.0, DATA_EDGE, dashed=True, lw=1.3)
+ax.text(90.6, 34, "reads", fontsize=7.6, color=MUTED, style="italic", rotation=90)
 
-# ---------------------------------------------------------------- gateways
-box(4, 0.2, 44, 4.0, "Razorpay Test Mode", "sandbox only · never production", "#ecfdf5", ENGINE_EDGE, fs=9.5)
-box(52, 0.2, 44, 4.0, "Local simulation", "deterministic · seeded · offline", "#ecfdf5", ENGINE_EDGE, fs=9.5)
-arrow(26, 5.6, 26, 4.2, DATA_EDGE)
-arrow(74, 5.6, 74, 4.2, DATA_EDGE)
-
-# ---------------------------------------------------------------- autonomy
+# ---------------------------------------------------------------- orchestration
+# LangGraph coordinates the sequence above. It is drawn ALONGSIDE the flow, with
+# no arrow into any component, because it neither decides nor generates.
 ax.add_patch(
     patches.FancyBboxPatch(
-        (73.5, 42.6), 0.001, 0.001, boxstyle="round", facecolor="none", edgecolor="none"
+        (0.6, 15.4), 1.6, 33.8,
+        boxstyle="round,pad=0.1,rounding_size=0.4",
+        facecolor=LANG, edgecolor=LANG_EDGE, linewidth=1.4,
+        linestyle="--", alpha=0.55, zorder=1,
     )
 )
 ax.text(
-    50, 27.6,
+    1.4, 32.3,
+    "LangGraph  ·  workflow / state orchestration only  ·  no decisions, no language",
+    rotation=90, ha="center", va="center", fontsize=8.4,
+    color=LANG_EDGE, weight="bold", zorder=3,
+)
+
+# ---------------------------------------------------------------- autonomy
+# The loop drives the WHOLE workflow, so it sits beside the engine that starts
+# it — not beside the language layer.
+ax.text(
+    50, 39.0,
     "Autonomous loop  ·  asyncio  ·  every ~12s  —  nobody presses a button",
-    ha="center", fontsize=9.5, color=GATE_EDGE, weight="bold", style="italic", zorder=5,
+    ha="center", fontsize=10, color=GATE_EDGE, weight="bold", style="italic", zorder=5,
 )
 
 # ---------------------------------------------------------------- legend

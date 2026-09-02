@@ -152,8 +152,17 @@ const LAYERS: Array<{ name: string; items: string[] }> = [
       'State machine',
     ],
   },
-  { name: 'Language', items: ['Ollama', 'Mistral', 'YAML templates', 'Compliance rules'] },
-  { name: 'Orchestration', items: ['LangGraph', 'Retrieval layer'] },
+  {
+    name: 'Language',
+    items: ['Ollama — wording only', 'Mistral', 'YAML templates', 'Compliance rules'],
+  },
+  {
+    // Qualified deliberately. Unlabelled, "LangGraph" beside "Retrieval" reads
+    // as though the graph decides something; it coordinates the sequence the
+    // deterministic engines run in, and generates nothing.
+    name: 'Orchestration',
+    items: ['LangGraph — workflow only', 'Retrieval — context only'],
+  },
   { name: 'Data', items: ['SQLAlchemy', 'SQLite', 'Redis (optional)'] },
   { name: 'Payments', items: ['Razorpay Test Mode', 'Simulation gateway'] },
 ];
