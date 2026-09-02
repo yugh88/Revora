@@ -21,6 +21,8 @@ import type {
   HealthResponse,
   CommunicationListResponse,
   CommunicationOut,
+  DryRunRequest,
+  DryRunResponse,
   NotificationListResponse,
   PromiseCreate,
   PromiseListResponse,
@@ -327,6 +329,19 @@ export const api = {
   /** POST /promises/evaluate — record promises whose date has passed unpaid. */
   evaluatePromises(): Promise<PromiseListResponse> {
     return request<PromiseListResponse>('/promises/evaluate', { method: 'POST' });
+  },
+
+  /**
+   * POST /batch/dry-run — run ONE specified case through the real pipeline.
+   *
+   * Not a simulation: the case is processed by the same code every batch uses,
+   * and the trace is read back from what was actually recorded.
+   */
+  dryRun(body: DryRunRequest): Promise<DryRunResponse> {
+    return request<DryRunResponse>('/batch/dry-run', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
   },
 
   /** GET /batch/runs — completed runs, newest first. Read-only. */

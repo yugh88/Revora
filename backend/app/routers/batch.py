@@ -49,6 +49,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 import json
+import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Iterable
@@ -96,6 +97,9 @@ from app.models import (
     StoppingRuleState,
 )
 from app.schemas.batch import (
+    DryRunRequest,
+    DryRunResponse,
+    TraceStep,
     RunDetailResponse,
     RunListResponse,
     RunSummary,
@@ -1694,6 +1698,289 @@ def post_batch(
             extra={"stage": "batch", "action": "record_run", "outcome": "error"},
         )
     return response
+
+
+@router.post(
+    "/batch/dry-run",
+    response_model=DryRunResponse,
+    summary="Run one specified case through the real pipeline",
+)
+def dry_run(body: DryRunRequest, session: Session = Depends(get_db)) -> DryRunResponse:
+    """Push a single operator-specified case through the REAL recovery pipeline.
+
+    This is a testing console, not a second implementation. It builds one record
+    in the shape the generator produces and hands it to ``process_record`` — the
+    same function every batch uses — so the diagnosis, scoring, policy gate,
+    stopping rules, compliance gate, communication and ledger writes are all the
+    production ones. There is no parallel decision path to drift out of step.
+
+    The run is REAL: the case is persisted, audited, and appears in the feed
+    like any other. A trace that rolled itself back could not honestly show an
+    audit entry, and would prove less.
+    """
+    now = utcnow()
+    run = BatchRun(
+        batch_id=f"dryrun_{int(time.time() * 1000):x}",
+        correlation_id=new_correlation_id("dryrun"),
+    )
+
+    customer_id = f"cust_dryrun_{uuid.uuid4().hex[:8]}"
+    raw_signal: dict[str, Any] = {
+        "payment_method": body.payment_method,
+        "attempt_number": body.attempts_already_made + 1,
+        "customer_name": body.customer_name,
+    }
+    if body.gateway_error_code:
+        raw_signal["gateway_error_code"] = body.gateway_error_code
+    if body.days_overdue is not None:
+        raw_signal["days_overdue"] = body.days_overdue
+        raw_signal["due_date"] = (
+            now - timedelta(days=body.days_overdue)
+        ).date().isoformat()
+    if body.event_type in (EventType.SUBSCRIPTION_FAILED, EventType.MANDATE_FAILED):
+        raw_signal["billing_period_months"] = 1
+
+    payload: dict[str, Any] = {
+        "id": f"evt_dryrun_{uuid.uuid4().hex[:10]}",
+        "merchant_id": "merch_demo_001",
+        "customer_id": customer_id,
+        "type": body.event_type.value,
+        # The validator expects a Decimal here, exactly as the generator emits.
+        "amount": body.amount,
+        "currency": "INR",
+        "detected_at": now,
+        "gateway_used": body.gateway.value,
+        "source_ref": f"dryrun_{uuid.uuid4().hex[:12]}",
+        "correlation_id": run.correlation_id,
+        "raw_signal": raw_signal,
+    }
+
+    profiles = {
+        customer_id: {
+            "customer_id": customer_id,
+            "name": body.customer_name,
+            "payment_success_rate": body.payment_success_rate,
+            "payment_failure_rate": 1.0 - body.payment_success_rate,
+            "avg_payment_delay_days": body.avg_payment_delay_days,
+            "do_not_contact": body.do_not_contact,
+            "preferred_channel": None,
+            "lifetime_value": str(body.amount * 10),
+        }
+    }
+
+    gateway = build_gateway(body.gateway)
+    with correlation_scope(run.correlation_id):
+        # Use the id the pipeline itself assigned rather than reconstructing it.
+        # process_record namespaces the stored identity, and rebuilding that
+        # string here would be a second implementation of a rule that already
+        # exists — and would silently break the moment it changed.
+        outcome_result = process_record(
+            session,
+            SyntheticRecord(payload=payload, ground_truth_root_cause=None, edge_cases=[]),
+            0,
+            run,
+            merchant={"merchant_id": "merch_demo_001", "name": "Demo Merchant"},
+            profiles=profiles,
+            gateway=gateway,
+            classifier=None,
+            load_ml=False,
+            seed=42,
+            now=now,
+        )
+    session.commit()
+
+    if outcome_result.failure or not outcome_result.event_id:
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "That test case could not be processed: "
+                f"{outcome_result.failure or 'no event was created'}"
+            ),
+        )
+
+    return _build_trace(session, outcome_result.event_id, body.amount)
+
+
+def _build_trace(session: Session, event_id: str, amount: Decimal) -> DryRunResponse:
+    from app.enums import CommunicationStatus
+    from app.models import CommunicationLog, Diagnosis, PromiseToPay
+
+    """Read back what the pipeline actually did, stage by stage.
+
+    Every step is READ from a persisted row. Nothing is inferred from what the
+    inputs "should" have produced — if a stage did not happen, it is reported as
+    not having happened.
+    """
+    event = session.get(RiskEvent, event_id)
+    if event is None:
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="The test case could not be created.",
+        )
+
+    steps: list[TraceStep] = [
+        TraceStep(
+            stage="detection",
+            title="Risk detected",
+            outcome=f"{event.currency} {event.amount} at risk",
+            detail=f"{event.type.value.replace('_', ' ')} recorded for review.",
+            status="passed",
+        )
+    ]
+
+    diagnosis = session.get(Diagnosis, event_id)
+    steps.append(
+        TraceStep(
+            stage="diagnosis",
+            title="Diagnosis",
+            outcome=diagnosis.root_cause_code.value if diagnosis else "not determined",
+            detail=(
+                "; ".join(str(item) for item in (diagnosis.evidence or [])[:2])
+                if diagnosis
+                else "No cause could be established from the signal supplied."
+            ),
+            status="passed" if diagnosis else "skipped",
+        )
+    )
+
+    decision = session.execute(
+        select(Decision)
+        .where(Decision.event_id == event_id)
+        .order_by(Decision.decided_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+    steps.append(
+        TraceStep(
+            stage="decision",
+            title="Decision",
+            outcome=decision.action_code if decision else "no action",
+            detail=(
+                f"Chosen from the ranked candidates; expected recovery "
+                f"{decision.recovery_probability:.0%}."
+                if decision
+                else "No permitted action was available."
+            ),
+            status="passed" if decision else "skipped",
+        )
+    )
+
+    verdict = decision.policy_result if decision and isinstance(decision.policy_result, dict) else {}
+    blocked = verdict.get("status") == "blocked"
+    steps.append(
+        TraceStep(
+            stage="policy",
+            title="Policy and stopping rules",
+            outcome="blocked" if blocked else "allowed",
+            detail=(
+                f"Refused by {verdict.get('rule_triggered')}."
+                if blocked
+                else "Within every configured limit."
+            ),
+            status="blocked" if blocked else "passed",
+        )
+    )
+
+    contact = session.execute(
+        select(CommunicationLog)
+        .where(CommunicationLog.event_id == event_id)
+        .order_by(CommunicationLog.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+    if contact is None:
+        steps.append(
+            TraceStep(
+                stage="execution",
+                title="Communication",
+                outcome="none",
+                detail="This action does not contact the customer.",
+                status="skipped",
+            )
+        )
+    else:
+        refused = contact.status == CommunicationStatus.BLOCKED
+        steps.append(
+            TraceStep(
+                stage="execution",
+                title="Communication",
+                outcome=("held back" if refused else f"{contact.channel.value} prepared"),
+                detail=(contact.blocked_reason or contact.body or "")[:220],
+                status="blocked" if refused else "passed",
+            )
+        )
+        steps.append(
+            TraceStep(
+                stage="execution",
+                title="Customer response",
+                outcome=(
+                    contact.customer_response.value
+                    if contact.customer_response
+                    else "no reply"
+                ),
+                detail=contact.reply_text or "The simulated customer did not reply.",
+                status="passed" if contact.customer_response else "skipped",
+            )
+        )
+
+    promise = session.execute(
+        select(PromiseToPay).where(PromiseToPay.event_id == event_id).limit(1)
+    ).scalar_one_or_none()
+    steps.append(
+        TraceStep(
+            stage="verification",
+            title="Promise to pay",
+            outcome=(
+                f"{promise.promised_amount} by {promise.promised_date.date().isoformat()}"
+                if promise
+                else "none"
+            ),
+            detail=(
+                "Recovery pauses until the promised date."
+                if promise
+                else "The customer made no dated commitment."
+            ),
+            status="passed" if promise else "skipped",
+        )
+    )
+
+    outcome = session.get(Outcome, event_id)
+    recovered = outcome.amount_recovered if outcome else Decimal("0.00")
+    steps.append(
+        TraceStep(
+            stage="recovery",
+            title="Outcome",
+            outcome=(outcome.resolved.value if outcome else "pending"),
+            detail=(
+                f"{event.currency} {recovered} recorded in the recovery ledger."
+                if recovered
+                else "No money has been recorded as recovered for this case."
+            ),
+            status="passed" if recovered else "info",
+        )
+    )
+
+    entries = list(
+        session.execute(select(AuditLog).where(AuditLog.event_id == event_id)).scalars()
+    )
+    steps.append(
+        TraceStep(
+            stage="audit",
+            title="Audit trail",
+            outcome=f"{len(entries)} entries",
+            detail="Every step above was recorded and can be reviewed later.",
+            status="passed" if entries else "info",
+        )
+    )
+
+    return DryRunResponse(
+        event_id=event_id,
+        steps=steps,
+        final_status=event.status.value,
+        amount_at_risk=str(event.amount),
+        amount_recovered=str(recovered),
+        audit_entries=len(entries),
+    )
 
 
 @router.get("/batch/runs", response_model=RunListResponse, summary="Completed recovery runs")

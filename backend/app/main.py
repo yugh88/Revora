@@ -99,9 +99,26 @@ async def _autonomous_recovery_loop(settings) -> None:
     # with a batch for the database.
     await asyncio.sleep(interval)
 
+    # Each pass needs its OWN seed.
+    #
+    # The generator is deterministic: generate_batch(3, seed=42) returns the
+    # same three customers every time. With a fixed seed the loop was
+    # regenerating Aditya Desai's identical ₹4,705.31 case every twelve
+    # seconds and storing each one as a brand-new event, so the recovery feed
+    # filled with copies of the same three people.
+    #
+    # Deriving the seed from the pass number keeps every run reproducible —
+    # pass 7 always produces the same cases — while making consecutive passes
+    # genuinely different work. Manual runs through /batch keep seed 42 and its
+    # documented reproducibility.
+    passes = 0
+
     while True:
         try:
-            def _pass() -> int:
+            passes += 1
+            pass_seed = 42 + passes
+
+            def _pass(seed: int = pass_seed) -> int:
                 session = SessionLocal()
                 try:
                     # Look again at cases waiting on the provider BEFORE taking
@@ -109,7 +126,9 @@ async def _autonomous_recovery_loop(settings) -> None:
                     # recorded before Revora goes looking for more work.
                     verify_pending_cases(session, gateway, now=utcnow())
                     return run_batch(
-                        session, BatchRequest(count=size), gateway=gateway
+                        session,
+                        BatchRequest(count=size, seed=seed),
+                        gateway=gateway,
                     ).processed
                 finally:
                     session.close()

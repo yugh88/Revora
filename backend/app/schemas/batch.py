@@ -13,11 +13,12 @@ value exact and make the frontend decide how to parse it.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from app.enums import GatewayUsed
+from app.enums import EventType, GatewayUsed
 
 #: Section 10: "process N synthetic records (default 50, supports 500)".
 DEFAULT_BATCH_SIZE = 50
@@ -274,3 +275,49 @@ class RunDetailResponse(BaseModel):
     #: The complete BatchResponse, stored verbatim so reopening a run renders
     #: through exactly the same presentation it did on completion.
     snapshot: dict[str, Any]
+
+
+class DryRunRequest(BaseModel):
+    """One operator-specified case to push through the real pipeline.
+
+    Every field maps to something the engine genuinely reads. There is no input
+    here that only affects presentation — if it is on the form, it changes a
+    diagnosis, a score, a policy verdict or a stopping rule.
+    """
+
+    event_type: EventType
+    customer_name: str = Field(default="Test Customer", min_length=1, max_length=80)
+    amount: Decimal = Field(gt=0)
+    #: Drives root-cause diagnosis. e.g. GATEWAY_ERROR_CARD_EXPIRED.
+    gateway_error_code: str | None = None
+    payment_method: str = "card"
+    #: Attempts already made. Feeds decay, cooldown and the attempt ceiling.
+    attempts_already_made: int = Field(default=0, ge=0, le=10)
+    #: Invoice ageing. Changes which actions are candidates.
+    days_overdue: int | None = Field(default=None, ge=0, le=365)
+    #: Customer history. Tilts the recovery probability.
+    payment_success_rate: float = Field(default=0.5, ge=0.0, le=1.0)
+    avg_payment_delay_days: float = Field(default=3.0, ge=0.0, le=180.0)
+    #: An absolute stop. Nothing may contact this customer.
+    do_not_contact: bool = False
+    gateway: GatewayUsed = GatewayUsed.LOCAL_SIMULATION
+
+
+class TraceStep(BaseModel):
+    """One stage of the run, as it actually happened."""
+
+    stage: str
+    title: str
+    outcome: str
+    detail: str
+    #: passed | blocked | skipped | info
+    status: str
+
+
+class DryRunResponse(BaseModel):
+    event_id: str
+    steps: list[TraceStep]
+    final_status: str
+    amount_at_risk: str
+    amount_recovered: str
+    audit_entries: int

@@ -576,3 +576,37 @@ export interface NotificationListResponse {
   total: number;
   items: MerchantNotification[];
 }
+
+/* --------------------------------------------------------------------------
+ * Dry run — one case through the real pipeline
+ * -------------------------------------------------------------------------- */
+
+export interface DryRunRequest {
+  event_type: EventType;
+  customer_name: string;
+  amount: string;
+  gateway_error_code: string | null;
+  attempts_already_made: number;
+  days_overdue: number | null;
+  payment_success_rate: number;
+  avg_payment_delay_days: number;
+  do_not_contact: boolean;
+}
+
+export interface TraceStep {
+  stage: string;
+  title: string;
+  outcome: string;
+  detail: string;
+  /** passed | blocked | skipped | info */
+  status: string;
+}
+
+export interface DryRunResponse {
+  event_id: string;
+  steps: TraceStep[];
+  final_status: string;
+  amount_at_risk: string;
+  amount_recovered: string;
+  audit_entries: number;
+}
