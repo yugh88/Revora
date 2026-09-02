@@ -10,7 +10,12 @@ import { Card, CardDescription, CardHeader, CardTitle } from '../../components/u
 import { AppShell } from '../../components/ui/site-header';
 import { cn } from '../../components/ui/utils';
 import { api, ApiError, formatInr } from '../../lib/api-client';
-import { eventTypeLabel } from '../../lib/labels';
+import {
+  eventStatusLabel,
+  eventTypeLabel,
+  humanSentence,
+  humanValue,
+} from '../../lib/labels';
 import { EVENT_TYPES, type DryRunResponse, type EventType } from '../../lib/types';
 
 /**
@@ -357,12 +362,12 @@ function Trace({ result }: { result: DryRunResponse }) {
                 <div className="flex flex-wrap items-baseline gap-x-2">
                   <span className="text-sm font-medium text-ink">{step.title}</span>
                   <span className={cn('text-xs font-medium', style.text)}>
-                    {step.outcome}
+                    {humanValue(step.outcome)}
                   </span>
                 </div>
                 {step.detail ? (
                   <p className="mt-1 text-xs leading-relaxed text-ink-muted">
-                    {step.detail}
+                    {humanSentence(step.detail)}
                   </p>
                 ) : null}
               </div>
@@ -375,7 +380,7 @@ function Trace({ result }: { result: DryRunResponse }) {
         <p className="text-xs text-ink-muted">
           Final status:{' '}
           <span className="font-medium text-ink">
-            {result.final_status.replace(/_/g, ' ')}
+            {eventStatusLabel(result.final_status)}
           </span>{' '}
           · {result.audit_entries} audit entries
         </p>

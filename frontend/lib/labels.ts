@@ -496,3 +496,75 @@ export function communicationNextStep(
   if (response === 'no_response') return 'No reply. Revora may try again within your limits.';
   return 'Simulate how the customer replied.';
 }
+
+/* --------------------------------------------------------------------------
+ * Humanising engine text
+ * --------------------------------------------------------------------------
+ * The engine records its own vocabulary — `cash_flow_delay`, `no_action`,
+ * `hard_stop_cause` — because an audit trail has to be precise and stable.
+ * That precision is exactly what a merchant should never be shown.
+ *
+ * Rather than rewrite what the engine stores, these helpers translate on the
+ * way out. The database keeps the identifiers an auditor needs; the screen
+ * shows the words a person reads.
+ */
+
+/** Every enum map, searched in order of specificity. */
+const ALL_MAPS: Array<Record<string, string>> = [
+  ROOT_CAUSE_LABEL,
+  ACTION_LABEL,
+  STOP_REASON_LABEL,
+  OUTCOME_LABEL,
+  EVENT_TYPE_LABEL,
+  CHANNEL_LABEL,
+  AUDIT_ACTION_LABEL,
+  STAGE_LABEL,
+  COMPLIANCE_RULE_LABEL,
+  POLICY_STATUS_LABEL,
+  PROMISE_STATUS_LABEL,
+  COMMUNICATION_STATUS_LABEL,
+  CUSTOMER_RESPONSE_LABEL,
+];
+
+/** Statuses a case can be in, in words. */
+export const EVENT_STATUS_LABEL: Record<string, string> = {
+  detected: 'Detected',
+  diagnosing: 'Being diagnosed',
+  intervening: 'Being worked',
+  recovered: 'Recovered',
+  unrecoverable: 'Written off',
+  escalated: 'With a person',
+  stopped: 'Stopped',
+  awaiting_approval: 'Awaiting approval',
+};
+
+export const eventStatusLabel = (v?: string | null) => lookup(EVENT_STATUS_LABEL, v);
+
+/**
+ * Translate a single engine value, whatever kind it is.
+ *
+ * Tries every known map before falling back to sentence case, so an identifier
+ * nobody has mapped yet still reads as words rather than as code.
+ */
+export function humanValue(value?: string | null): string {
+  if (!value) return '—';
+  const key = value.trim();
+  if (!key) return '—';
+  const found = ALL_MAPS.find((map) => key in map);
+  return found ? found[key] : toSentence(key);
+}
+
+/**
+ * Translate every engine identifier embedded in a sentence.
+ *
+ * The engine writes prose with identifiers inside it — "Policy gate blocked
+ * every candidate: hard_stop_cause". Replacing each token in place keeps the
+ * sentence intact while removing the vocabulary a merchant cannot read.
+ */
+export function humanSentence(text?: string | null): string {
+  if (!text) return '';
+  return text.replace(/\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b/g, (token) => {
+    const mapped = ALL_MAPS.find((map) => token in map);
+    return (mapped ? mapped[token] : toSentence(token)).toLowerCase();
+  });
+}

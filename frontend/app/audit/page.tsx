@@ -12,7 +12,7 @@ import { LiveIndicator } from '../../components/ui/live-status';
 import { useLiveRefresh } from '../../components/ui/use-live-data';
 import { cn } from '../../components/ui/utils';
 import { api, ApiError, formatCount, formatDateTime, formatRelative } from '../../lib/api-client';
-import { auditActionLabel, stageLabel } from '../../lib/labels';
+import { auditActionLabel, humanSentence, stageLabel } from '../../lib/labels';
 import { PIPELINE_STAGES, type AuditListResponse, type AuditQuery } from '../../lib/types';
 
 /**
@@ -223,7 +223,7 @@ export default function AuditPage() {
 
                       {entry.reasoning ? (
                         <p className="mt-1.5 text-xs leading-relaxed text-ink-muted">
-                          {entry.reasoning}
+                          {humanSentence(entry.reasoning)}
                         </p>
                       ) : null}
 
