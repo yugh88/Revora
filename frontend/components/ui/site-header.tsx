@@ -14,7 +14,6 @@ import {
   Landmark,
   LayoutDashboard,
   Menu,
-  MessageSquareText,
   RefreshCw,
   ShoppingCart,
   Bell,
@@ -85,7 +84,6 @@ const PRIMARY: NavGroup[] = [
   { label: 'Promises to Pay', icon: HandCoins, href: '/promises' },
   { label: 'Run Recovery', icon: FlaskConical, href: '/batch' },
   { label: 'Communications', icon: MessageSquare, href: '/communications' },
-  { label: 'Recovery Messages', icon: MessageSquareText, href: '/scripts' },
   { label: 'Audit', icon: FileClock, href: '/audit' },
   { label: 'Policies', icon: SlidersHorizontal, href: '/policies' },
 ];
@@ -230,7 +228,6 @@ function currentSection(pathname: string): string {
   if (pathname.startsWith('/help')) return 'Help & Documentation';
   if (pathname.startsWith('/promises')) return 'Promises to Pay';
   if (pathname.startsWith('/batch')) return 'Recovery Runs';
-  if (pathname.startsWith('/scripts')) return 'Recovery Messages';
   if (pathname.startsWith('/audit')) return 'Audit';
   if (pathname.startsWith('/policies')) return 'Policies';
   return 'Revora';

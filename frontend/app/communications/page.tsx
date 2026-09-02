@@ -26,6 +26,7 @@ import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Card, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
 import { AppShell } from '../../components/ui/site-header';
+import { MessageDetail } from './message-detail';
 import { LiveIndicator } from '../../components/ui/live-status';
 import { useLiveRefresh } from '../../components/ui/use-live-data';
 import { cn } from '../../components/ui/utils';
@@ -37,17 +38,19 @@ import {
   formatRelative,
 } from '../../lib/api-client';
 import {
+  complianceRuleLabel,
   communicationNextStep,
   communicationStatusLabel,
   communicationStatusMeaning,
   contactLabel,
   customerResponseLabel,
   rootCauseLabel,
+  toneLabel,
+  urgencyLabel,
 } from '../../lib/labels';
 import type {
   CommunicationListResponse,
   CommunicationOut,
-  EventSummary,
   ScriptResponse,
 } from '../../lib/types';
 
@@ -374,6 +377,18 @@ function Communications() {
 
 /* -------------------------------------------------------------------------- */
 
+/**
+ * The message, and everything behind it.
+ *
+ * Recovery Messages used to be a separate page showing the reasoning, the tone
+ * and urgency, and the full compliance verdict for a case. Splitting that from
+ * the conversation it belongs to meant a merchant had to hold two screens in
+ * their head to answer one question: "why is Revora saying this, and is it
+ * allowed?". It is all here now.
+ *
+ * Fetched lazily, per conversation, and keyed by event so switching customers
+ * cannot show the previous one's reasoning.
+ */
 function ContactDetail({
   contact,
   busy,
@@ -393,6 +408,24 @@ function ContactDetail({
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 3);
   const [date, setDate] = React.useState(tomorrow.toISOString().slice(0, 10));
+
+  // The reasoning and compliance verdict for this case. Loaded on demand
+  // because most conversations are never opened, and a list of forty would
+  // otherwise make forty requests nobody asked for.
+  const [script, setScript] = React.useState<ScriptResponse | null>(null);
+  React.useEffect(() => {
+    let cancelled = false;
+    setScript(null);
+    api
+      .getScript(contact.event_id)
+      .then((body) => {
+        if (!cancelled) setScript(body);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [contact.event_id]);
 
   return (
     <Card className="sticky top-24">
@@ -495,6 +528,8 @@ function ContactDetail({
             </Link>
           ) : null}
         </div>
+
+        {script ? <MessageDetail script={script} /> : null}
 
         {contact.status === 'prepared' ? (
           <DemoBlock>

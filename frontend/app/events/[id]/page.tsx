@@ -27,7 +27,9 @@ import type { EventDetailResponse } from '../../../lib/types';
 const ORIGINS: Record<string, { href: string; label: string }> = {
   events: { href: '/events', label: 'Back to All Recoveries' },
   audit: { href: '/audit', label: 'Back to Audit' },
-  scripts: { href: '/scripts', label: 'Back to Recovery Messages' },
+  // Recovery Messages was merged into Communications; anything still
+  // arriving with the old origin lands where that content now lives.
+  scripts: { href: '/communications', label: 'Back to Communications' },
   batch: { href: '/batch', label: 'Back to Recovery Runs' },
   promises: { href: '/promises', label: 'Back to Promises to Pay' },
   communications: { href: '/communications', label: 'Back to Communications' },
