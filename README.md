@@ -115,6 +115,10 @@ promise overdue → recovery resumes automatically
 Hinglish and Redis for locking — both genuinely optional.
 
 ```bash
+docker compose up --build          # Everything at once
+```
+
+```bash
 # Backend
 cd backend
 pip install -r requirements.txt
@@ -126,10 +130,6 @@ npm install && npm run dev
 ```
 
 Open `http://localhost:3000`. Recovery starts on its own within seconds.
-
-```bash
-docker compose up          # or everything at once
-```
 
 ### Tests
 
@@ -178,4 +178,4 @@ app under **About Revora**, where hovering a stage reveals its stack.
 
 ## Licence
 
-Built for the Razorpay Buildathon. Not for production use.
+Built for the Razorpay Buildathon.
