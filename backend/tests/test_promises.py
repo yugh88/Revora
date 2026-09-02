@@ -17,7 +17,7 @@ Each is tested against the real ledger rather than against the promise row.
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -27,12 +27,47 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db, utcnow
-from app.engine import promise_tracker
+from app.engine import promise_tracker, template_engine
+from app.engine.template_engine import IST
 from app.enums import EventStatus, OutcomeResolution, PromiseStatus
 from app.main import app
 from app.models import AuditLog, Outcome, PromiseToPay, RiskEvent
 from app.routers.batch import run_batch
 from app.schemas.batch import BatchRequest
+
+
+#: Midday IST — inside the Section 7 contact window.
+MIDDAY = datetime(2026, 8, 30, 12, 0, tzinfo=IST).astimezone(timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def _inside_contact_hours(monkeypatch):
+    """Evaluate the REAL contact-window rule against a fixed, in-window time.
+
+    Promises now arise from recovery runs, and a run can only produce one if a
+    contact was actually made. Outside 08:00-19:00 IST the compliance gate
+    blocks every message — correctly — so these tests passed by day and failed
+    by night purely on the hour they were run at.
+
+    The rule itself still executes in full and still reads compliance_rules.yaml;
+    it is only told what time it is, through the ``now`` parameter the engine
+    already exposes for exactly this. Every other check — frequency cap, urgency
+    ceiling, coercive language — runs untouched, so a message refused for any of
+    those is still refused here.
+
+    This is the same fixture test_communications.py and test_notifications.py
+    already use. It should have been added here when promises began depending on
+    a contact having been made.
+    """
+    real = template_engine.check_contact_window
+    # Pinned regardless of what the caller passes. A batch supplies its own
+    # `now` (the real clock), so a `now or MIDDAY` fallback would never fire —
+    # which is exactly why these tests still failed after the fixture was first
+    # added. Nothing in this module tests out-of-window behaviour, so forcing
+    # the instant is safe here; test_template_engine.py covers the boundary.
+    monkeypatch.setattr(
+        template_engine, "check_contact_window", lambda now=None: real(MIDDAY)
+    )
 
 
 @pytest.fixture()
@@ -791,7 +826,7 @@ class TestAnOpenPromisePausesRecovery:
 
     def test_recovery_resumes_once_the_date_passes(self, client_and_session):
         """No sweep required: the pause reads the date, not a stored flag."""
-        from datetime import timedelta
+        from datetime import datetime, timedelta, timezone
 
         from app.engine.diagnosis_engine import ActionCode
 
@@ -811,3 +846,118 @@ class TestAnOpenPromisePausesRecovery:
         session.flush()
         verdict = self._rule(session, event, result, policy, ActionCode.SMS_REMINDER)
         assert verdict.status.value == "allowed"
+
+
+class TestPendingCasesAreVerifiedLater:
+    """Some actions have no immediate answer.
+
+    `await_gateway_auto_retry` — the only permitted move on a failed
+    subscription — means "the provider will retry this itself". Its result only
+    exists later, and nothing used to look. Every subscription therefore sat at
+    PENDING for ever and the category reported zero recovered, not because
+    recovery failed but because nobody ever checked.
+    """
+
+    def _fresh(self):
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from sqlalchemy.pool import StaticPool
+
+        from app.gateways.local_simulation import LocalSimulationGateway
+        from app.routers.batch import run_batch as _run
+
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+            future=True,
+        )
+        Base.metadata.create_all(bind=engine)
+        session = sessionmaker(bind=engine, expire_on_commit=False, future=True)()
+        gateway = LocalSimulationGateway(seed=42)
+        logging.disable(logging.CRITICAL)
+        _run(session, BatchRequest(count=120), gateway=gateway, load_ml=False)
+        logging.disable(logging.NOTSET)
+        return session, gateway, engine
+
+    def _recovered_subscriptions(self, session):
+        from app.enums import EventType, OutcomeResolution
+        from app.models import Outcome, RiskEvent
+
+        total = Decimal("0.00")
+        count = 0
+        for event in session.execute(
+            select(RiskEvent).where(RiskEvent.type == EventType.SUBSCRIPTION_FAILED)
+        ).scalars():
+            outcome = session.get(Outcome, event.id)
+            if outcome is not None and outcome.resolved == OutcomeResolution.RECOVERED:
+                total += outcome.amount_recovered
+                count += 1
+        return count, total
+
+    def test_the_sweep_resolves_cases_the_provider_has_settled(self):
+        from app.routers.batch import verify_pending_cases
+
+        session, gateway, engine = self._fresh()
+        try:
+            before_count, _ = self._recovered_subscriptions(session)
+            # The provider's auto-retry window is a day; look after it passes.
+            settled = verify_pending_cases(
+                session, gateway, now=utcnow() + timedelta(days=2), limit=300
+            )
+            after_count, after_total = self._recovered_subscriptions(session)
+
+            assert settled > 0, "the sweep settled nothing"
+            assert after_count > before_count
+            assert after_total > 0
+        finally:
+            session.close()
+            engine.dispose()
+
+    def test_nothing_resolves_before_the_window_passes(self):
+        """The provider has not retried yet, so there is nothing to record."""
+        from app.routers.batch import verify_pending_cases
+
+        session, gateway, engine = self._fresh()
+        try:
+            before = self._recovered_subscriptions(session)
+            verify_pending_cases(session, gateway, now=utcnow(), limit=300)
+            assert self._recovered_subscriptions(session) == before
+        finally:
+            session.close()
+            engine.dispose()
+
+    def test_the_sweep_keeps_the_ledger_balanced(self):
+        from app.routers.batch import verify_pending_cases
+        from app.routers.events import _money_summary
+        from app.models import RiskEvent
+
+        session, gateway, engine = self._fresh()
+        try:
+            verify_pending_cases(
+                session, gateway, now=utcnow() + timedelta(days=2), limit=300
+            )
+            money = _money_summary(session, lambda stmt: stmt, {})
+            total = (
+                Decimal(money.amount_recovered)
+                + Decimal(money.amount_pending)
+                + Decimal(money.amount_lost)
+            )
+            assert total == Decimal(money.amount_at_risk)
+        finally:
+            session.close()
+            engine.dispose()
+
+    def test_running_the_sweep_twice_does_not_recover_twice(self):
+        from app.routers.batch import verify_pending_cases
+
+        session, gateway, engine = self._fresh()
+        try:
+            later = utcnow() + timedelta(days=2)
+            verify_pending_cases(session, gateway, now=later, limit=300)
+            first = self._recovered_subscriptions(session)
+            verify_pending_cases(session, gateway, now=later, limit=300)
+            assert self._recovered_subscriptions(session) == first
+        finally:
+            session.close()
+            engine.dispose()

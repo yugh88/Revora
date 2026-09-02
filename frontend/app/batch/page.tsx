@@ -25,6 +25,8 @@ import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Card, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
 import { AppShell } from '../../components/ui/site-header';
+import { LiveIndicator } from '../../components/ui/live-status';
+import { useLiveRefresh } from '../../components/ui/use-live-data';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip';
 import { cn } from '../../components/ui/utils';
 import {
@@ -101,14 +103,15 @@ function RunRecovery() {
   const loadHistory = React.useCallback(async () => {
     try {
       setHistory((await api.listRuns()).items);
+      return true;
     } catch {
       // History is a convenience; its absence must not break the page.
+      return false;
     }
   }, []);
 
-  React.useEffect(() => {
-    void loadHistory();
-  }, [loadHistory]);
+  // Runs finish on their own now, so the list has to grow on its own too.
+  const { status: liveStatus, lastUpdated } = useLiveRefresh(loadHistory, []);
 
   // Reopen a stored run when the URL names one.
   React.useEffect(() => {
@@ -175,103 +178,19 @@ function RunRecovery() {
       <main className="mx-auto max-w-[1400px] px-4 py-8 sm:px-6 lg:px-8">
         <div className="animate-fade-up">
           <h1 className="text-2xl font-semibold tracking-tight text-ink">
-            Run recovery analysis
+            Recovery runs
           </h1>
+          <LiveIndicator status={liveStatus} lastUpdated={lastUpdated} />
           <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-ink-muted">
-            Revora reviews a set of at-risk payments, decides what to do about each one
-            within your limits, acts, and verifies the result.
+            Every batch of cases Revora has worked, and what came back. Recovery happens
+            on its own — nothing here needs starting.
           </p>
         </div>
 
         <div className="mt-6 grid grid-cols-1 gap-5 lg:grid-cols-3">
           {/* ---------------- Configuration ---------------- */}
           <div className="animate-fade-up stagger-1 lg:col-span-1">
-            <Card className="sticky top-24">
-              <CardHeader>
-                <CardTitle>Recovery settings</CardTitle>
-                <CardDescription>
-                  Choose how many cases to work and where recovery runs.
-                </CardDescription>
-              </CardHeader>
-
-              <div className="space-y-5 px-5 pb-5">
-                <fieldset disabled={running}>
-                  <legend className="text-micro font-semibold uppercase text-ink-subtle">
-                    Cases to review
-                  </legend>
-                  <div
-                    role="radiogroup"
-                    aria-label="Cases per analysis"
-                    className="mt-2.5 flex gap-2"
-                  >
-                    {SIZES.map((option) => (
-                      <button
-                        key={option}
-                        type="button"
-                        role="radio"
-                        aria-checked={option === size}
-                        disabled={running}
-                        onClick={() => setSize(option)}
-                        className={cn(
-                          'tabular flex-1 rounded-lg border px-3 py-2.5 text-sm font-semibold transition-all',
-                          'outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg',
-                          'disabled:cursor-not-allowed disabled:opacity-60',
-                          option === size
-                            ? 'border-accent/50 bg-accent/[0.06] text-ink shadow-card'
-                            : 'border-line bg-surface text-ink-subtle hover:border-line-strong hover:text-ink',
-                        )}
-                      >
-                        {option}
-                        <span className="mt-0.5 block text-micro font-normal text-ink-subtle">
-                          {option === 50 ? 'quick pass' : 'full run'}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </fieldset>
-
-                <GatewayToggle value={gateway} onChange={setGateway} disabled={running} />
-
-                {/* What pressing the button will actually do. */}
-                <div className="rounded-lg border border-line bg-surface-raised/50 px-3 py-2.5">
-                  <p className="flex items-center gap-1.5 text-micro font-semibold uppercase text-ink-subtle">
-                    <Database className="h-3 w-3" aria-hidden="true" />
-                    What happens
-                  </p>
-                  <p className="mt-1.5 text-xs leading-relaxed text-ink-muted">
-                    Revora will review {size} at-risk cases, work out why each one failed,
-                    choose a recovery action within your policy limits, and verify what
-                    happened. The results are saved and will appear in your recoveries and
-                    activity log.
-                  </p>
-                  <p className="mt-2 text-xs leading-relaxed text-ink-subtle">
-                    This is a repeatable demonstration scenario — the same set of cases
-                    each time, so results are comparable between runs rather than newly
-                    discovered revenue.
-                  </p>
-                </div>
-
-                <Button
-                  onClick={() => void run()}
-                  disabled={running}
-                  className="w-full"
-                  aria-label={`Run recovery on ${size} cases`}
-                >
-                  {running ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                      Running…
-                    </>
-                  ) : (
-                    <>
-                      <Play className="h-4 w-4" aria-hidden="true" />
-                      Run recovery
-                    </>
-                  )}
-                </Button>
-              </div>
-            </Card>
-
+            <AutonomousNotice />
             <RunHistory runs={history} openRunId={openRunId} />
           </div>
 
@@ -313,6 +232,30 @@ function RunRecovery() {
  * The figures shown are the ones that run reported at the time. They are not
  * recomputed, so a past run keeps saying what the merchant actually saw.
  */
+/**
+ * Why there is no button on this page any more.
+ *
+ * Recovery is not something a merchant launches; Revora processes payment
+ * events as they arrive. This page is a record of what it has done, not a
+ * control for making it happen.
+ */
+function AutonomousNotice() {
+  return (
+    <Card className="mb-5">
+      <div className="flex items-start gap-2.5 p-5">
+        <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-recovered" aria-hidden="true" />
+        <div>
+          <p className="text-sm font-semibold text-ink">Recovery is running</p>
+          <p className="mt-1 text-xs leading-relaxed text-ink-muted">
+            Revora works payment events as they arrive. Runs appear here as they
+            complete — there is nothing to start.
+          </p>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 function RunHistory({
   runs,
   openRunId,

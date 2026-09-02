@@ -303,6 +303,20 @@ def prepare_communication(
             detail="The recovery message could not be written.",
         ) from exc
 
+    # The language layer runs AFTER compliance has approved the script, and its
+    # output is re-checked before use. A refused message never reaches it.
+    body_text = ""
+    if result.compliant:
+        from app.engine.retrieval import retrieve_context
+        from app.services.hinglish_llm import enhance_script
+
+        body_text = enhance_script(
+            result=result,
+            stopping_state=session.get(StoppingRuleState, event.id),
+            policy=policy,
+            context=retrieve_context(session, event).as_prompt_block(),
+        )
+
     record = CommunicationLog(
         event_id=event.id,
         channel=channel,
@@ -311,7 +325,7 @@ def prepare_communication(
         status=(
             CommunicationStatus.PREPARED if result.compliant else CommunicationStatus.BLOCKED
         ),
-        body=result.script if result.compliant else "",
+        body=body_text,
         reason=(diagnosis.root_cause_code.value if diagnosis else "unknown"),
         channel_reason=why if body.channel is None else "You chose this channel.",
         blocked_reason=None if result.compliant else result.failure_reason,

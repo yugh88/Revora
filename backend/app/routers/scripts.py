@@ -133,13 +133,27 @@ def _build_script_response(
             detail=f"Script templates could not be rendered: {exc}",
         ) from exc
 
+    # The Hinglish rewrite, applied to the already-approved script and
+    # re-validated before use. Read-only: this endpoint writes nothing, and a
+    # refused script never reaches the language layer at all.
+    from app.engine.retrieval import retrieve_context
+    from app.services.hinglish_llm import enhance_script
+
+    final_script = enhance_script(
+        result=result,
+        stopping_state=session.get(StoppingRuleState, event_id),
+        policy=policy,
+        now=now,
+        context=retrieve_context(session, event, now=now).as_prompt_block(),
+    )
+
     return ScriptResponse(
         event_id=event.id,
         event_type=event.type.value,
         customer_id=event.customer_id,
         amount=str(event.amount),
         currency=event.currency,
-        script=result.script,
+        script=final_script,
         reasoning=result.reasoning,
         tone=result.tone,
         urgency=result.urgency,

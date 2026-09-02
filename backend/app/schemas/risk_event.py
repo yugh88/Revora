@@ -84,6 +84,13 @@ class EventMoneySummary(BaseModel):
     amount_pending: str
     currency: str = "INR"
     recovery_rate: float
+    #: Annualised recurring revenue retained through verified recovery.
+    #:
+    #: Only recurring cases contribute, and only at the cadence recorded on the
+    #: event: a monthly charge recovered is worth twelve of itself a year, an
+    #: annual one is worth exactly itself. A one-off invoice contributes
+    #: nothing, because there is no recurrence to annualise.
+    arr_retained: str
     #: Events the engine is still working: intervening + escalated.
     active_interventions: int
 

@@ -10,6 +10,8 @@ import { EventDrilldown } from '../../../components/EventDrilldown';
 import { Button } from '../../../components/ui/button';
 import { Card } from '../../../components/ui/card';
 import { AppShell } from '../../../components/ui/site-header';
+import { LiveIndicator } from '../../../components/ui/live-status';
+import { useLiveRefresh } from '../../../components/ui/use-live-data';
 import { api, ApiError } from '../../../lib/api-client';
 import type { EventDetailResponse } from '../../../lib/types';
 
@@ -26,7 +28,7 @@ const ORIGINS: Record<string, { href: string; label: string }> = {
   events: { href: '/events', label: 'Back to All Recoveries' },
   audit: { href: '/audit', label: 'Back to Audit' },
   scripts: { href: '/scripts', label: 'Back to Recovery Messages' },
-  batch: { href: '/batch', label: 'Back to Run Recovery' },
+  batch: { href: '/batch', label: 'Back to Recovery Runs' },
   promises: { href: '/promises', label: 'Back to Promises to Pay' },
   communications: { href: '/communications', label: 'Back to Communications' },
 };
@@ -72,24 +74,37 @@ export default function EventDetailPage() {
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<ApiError | null>(null);
 
-  const load = React.useCallback(async () => {
-    if (!eventId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      setDetail(await api.getEvent(eventId));
-    } catch (caught) {
-      setError(
-        caught instanceof ApiError ? caught : new ApiError('Could not load this event.'),
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [eventId]);
+  const load = React.useCallback(
+    async (quiet = false) => {
+      if (!eventId) return true;
+      if (!quiet) {
+        setLoading(true);
+        setError(null);
+      }
+      try {
+        setDetail(await api.getEvent(eventId));
+        setError(null);
+        return true;
+      } catch (caught) {
+        if (!quiet) {
+          setError(
+            caught instanceof ApiError
+              ? caught
+              : new ApiError('Could not load this event.'),
+          );
+        }
+        return false;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [eventId],
+  );
 
-  React.useEffect(() => {
-    void load();
-  }, [load]);
+  // A case being worked while it is open should change on screen: a new
+  // attempt, a promise, a recovery. Keyed on the id so opening a different
+  // case refetches at once instead of waiting for the next tick.
+  const { status: liveStatus, lastUpdated } = useLiveRefresh(load, [eventId]);
 
   const notFound = error?.status === 404;
 
@@ -109,6 +124,7 @@ export default function EventDetailPage() {
             <h1 className="text-2xl font-semibold tracking-tight text-ink">
               Recovery details
             </h1>
+            <LiveIndicator status={liveStatus} lastUpdated={lastUpdated} />
           </div>
           <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-ink-muted">
             What happened, why, what Revora decided to do about it, and how it turned

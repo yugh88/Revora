@@ -17,6 +17,8 @@ import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Card, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
 import { AppShell } from '../../components/ui/site-header';
+import { LiveIndicator } from '../../components/ui/live-status';
+import { useLiveRefresh } from '../../components/ui/use-live-data';
 import { cn } from '../../components/ui/utils';
 import {
   api,
@@ -82,27 +84,37 @@ export default function PromisesPage() {
   const [error, setError] = React.useState<ApiError | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
 
-  const load = React.useCallback(async () => {
-    setLoading(true);
-    try {
-      const body = await api.listPromises(undefined, promiseSince(since));
-      setData(body);
-      setSelected((current) =>
-        current ? (body.items.find((p) => p.id === current.id) ?? null) : null,
-      );
-      setError(null);
-    } catch (caught) {
-      setError(
-        caught instanceof ApiError ? caught : new ApiError('Promises could not be loaded.'),
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [since]);
+  const load = React.useCallback(
+    async (quiet = false) => {
+      if (!quiet) setLoading(true);
+      try {
+        const body = await api.listPromises(undefined, promiseSince(since));
+        setData(body);
+        // The open promise is re-read from the fresh list, so a detail panel
+        // shows the promise as it is NOW rather than as it was when opened —
+        // one that gets fulfilled while being looked at updates in place.
+        setSelected((current) =>
+          current ? (body.items.find((p) => p.id === current.id) ?? null) : null,
+        );
+        setError(null);
+        return true;
+      } catch (caught) {
+        if (!quiet) {
+          setError(
+            caught instanceof ApiError
+              ? caught
+              : new ApiError('Promises could not be loaded.'),
+          );
+        }
+        return false;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [since],
+  );
 
-  React.useEffect(() => {
-    void load();
-  }, [load]);
+  const { status: liveStatus, lastUpdated } = useLiveRefresh(load, [since]);
 
   const act = React.useCallback(
     async (fn: () => Promise<unknown>, message: string) => {
@@ -130,9 +142,12 @@ export default function PromisesPage() {
       <main className="mx-auto max-w-[1240px] px-4 py-8 sm:px-6 lg:px-8">
         <div className="animate-fade-up flex flex-wrap items-end justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-ink">
-              Promises to pay
-            </h1>
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-2xl font-semibold tracking-tight text-ink">
+                Promises to pay
+              </h1>
+              <LiveIndicator status={liveStatus} lastUpdated={lastUpdated} />
+            </div>
             <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-ink-muted">
               Customers who have told you when they expect to pay. Revora pauses recovery
               until the promised date, then checks whether the payment arrived.

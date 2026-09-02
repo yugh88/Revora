@@ -26,6 +26,8 @@ import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Card, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
 import { AppShell } from '../../components/ui/site-header';
+import { LiveIndicator } from '../../components/ui/live-status';
+import { useLiveRefresh } from '../../components/ui/use-live-data';
 import { cn } from '../../components/ui/utils';
 import {
   api,
@@ -138,32 +140,40 @@ function Communications() {
   const [error, setError] = React.useState<ApiError | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
 
-  const load = React.useCallback(async () => {
-    setLoading(true);
-    try {
-      const body = await api.listCommunications(
-        channel || undefined,
-        sinceIso(since),
-      );
-      setData(body);
-      setSelected((current) =>
-        current ? (body.items.find((c) => c.id === current.id) ?? null) : null,
-      );
-      setError(null);
-    } catch (caught) {
-      setError(
-        caught instanceof ApiError
-          ? caught
-          : new ApiError('Recovery messages could not be loaded.'),
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [channel, since]);
+  const load = React.useCallback(
+    async (quiet = false) => {
+      if (!quiet) setLoading(true);
+      try {
+        const body = await api.listCommunications(
+          channel || undefined,
+          sinceIso(since),
+        );
+        setData(body);
+        // Re-read the open conversation from the fresh list. A reply that
+        // arrives while it is on screen should appear in place, and a record
+        // that no longer matches the filter should stop being selected.
+        setSelected((current) =>
+          current ? (body.items.find((c) => c.id === current.id) ?? null) : null,
+        );
+        setError(null);
+        return true;
+      } catch (caught) {
+        if (!quiet) {
+          setError(
+            caught instanceof ApiError
+              ? caught
+              : new ApiError('Recovery messages could not be loaded.'),
+          );
+        }
+        return false;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [channel, since],
+  );
 
-  React.useEffect(() => {
-    void load();
-  }, [load]);
+  const { status: liveStatus, lastUpdated } = useLiveRefresh(load, [channel, since]);
 
   const act = React.useCallback(
     async (fn: () => Promise<unknown>, message: string) => {
@@ -190,9 +200,12 @@ function Communications() {
     <AppShell>
       <main className="mx-auto max-w-[1240px] px-4 py-8 sm:px-6 lg:px-8">
         <div className="animate-fade-up">
-          <h1 className="text-2xl font-semibold tracking-tight text-ink">
-            Recovery communications
-          </h1>
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-2xl font-semibold tracking-tight text-ink">
+              Recovery communications
+            </h1>
+            <LiveIndicator status={liveStatus} lastUpdated={lastUpdated} />
+          </div>
           <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-ink-muted">
             The customers Revora decided to contact, why it chose them, and what came
             of each conversation.

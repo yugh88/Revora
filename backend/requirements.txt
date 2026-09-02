@@ -40,3 +40,13 @@ joblib==1.4.2
 # only and is never imported by application code.
 pytest==8.3.4
 httpx==0.28.1
+
+# Workflow orchestration over the existing engines. Pulls langchain-core
+# as a transitive dependency for its type plumbing; no LangChain chain,
+# agent or tool abstraction is used anywhere in this codebase.
+langgraph==1.2.11
+
+# OPTIONAL. Distributed locks and a fast idempotency pre-check only.
+# Revora runs correctly with no Redis present; the database remains the
+# source of truth for every rupee.
+redis==8.1.0

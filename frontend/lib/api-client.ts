@@ -595,3 +595,20 @@ export function monthsOfHistory(earliest: string | null, now = new Date()): numb
     (now.getFullYear() - first.getFullYear()) * 12 + (now.getMonth() - first.getMonth()) + 1
   );
 }
+
+/* --------------------------------------------------------------------------
+ * Live synchronisation
+ * --------------------------------------------------------------------------
+ * Revora works on its own; the interface just has to keep up. This is the ONE
+ * place that decides how often the UI re-reads the backend, so pages cannot
+ * drift into having their own refresh behaviour and showing each other
+ * different numbers.
+ *
+ * This interval is the UI's, not the engine's. Recovery happens when Revora
+ * processes an event, on its own cadence — polling more often would only make
+ * the screen redraw sooner, never make recovery happen faster.
+ */
+
+export const LIVE_REFRESH_MS = 5_000;
+
+export type LiveStatus = 'live' | 'reconnecting';

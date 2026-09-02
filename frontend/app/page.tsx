@@ -17,9 +17,12 @@ import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 import { AppShell } from '../components/ui/site-header';
 import { cn } from '../components/ui/utils';
+import { LiveIndicator } from '../components/ui/live-status';
 import {
   api,
   ApiError,
+  LIVE_REFRESH_MS,
+  type LiveStatus,
   formatCount,
   formatInr,
   formatInrCompact,
@@ -76,12 +79,15 @@ export default function OverviewPage() {
   const [trend, setTrend] = React.useState<TrendPoint[]>([]);
   const [promises, setPromises] = React.useState<PromiseListResponse | null>(null);
   const [loading, setLoading] = React.useState(true);
-  const [running, setRunning] = React.useState(false);
   const [error, setError] = React.useState<ApiError | null>(null);
+  const [status, setStatus] = React.useState<LiveStatus>('live');
+  const [lastUpdated, setLastUpdated] = React.useState<Date | null>(null);
 
-  const load = React.useCallback(async (key: PeriodKey) => {
-    setLoading(true);
-    setError(null);
+  const load = React.useCallback(async (key: PeriodKey, options?: { quiet?: boolean }) => {
+    // A background refresh never shows a spinner and never clears what is on
+    // screen. Blanking a dashboard every five seconds would make live updating
+    // worse than not having it.
+    if (!options?.quiet) setLoading(true);
     const window = periodWindow(key);
     const scope = { detected_from: window.from, detected_to: window.to };
 
@@ -135,38 +141,44 @@ export default function OverviewPage() {
       } catch {
         setPromises(null);  // absence is not an error worth blocking the page
       }
+      setStatus('live');
+      setLastUpdated(new Date());
+      setError(null);
     } catch (caught) {
-      setError(
-        caught instanceof ApiError
-          ? caught
-          : new ApiError('The recovery figures could not be loaded.'),
-      );
+      // Keep the previous figures. Stale numbers beat an empty page.
+      setStatus('reconnecting');
+      if (!options?.quiet) {
+        setError(
+          caught instanceof ApiError
+            ? caught
+            : new ApiError('The recovery figures could not be loaded.'),
+        );
+      }
     } finally {
       setLoading(false);
     }
   }, []);
 
+  // Revora works on its own; this keeps the page in step with it. One shared
+  // interval for the whole application, so no two pages can show different
+  // numbers for the same moment.
   React.useEffect(() => {
+    let cancelled = false;
+    const tick = () => {
+      if (!cancelled && !document.hidden) void load(period, { quiet: true });
+    };
     void load(period);
+    const timer = setInterval(tick, LIVE_REFRESH_MS);
+    const onVisible = () => {
+      if (!document.hidden) void load(period, { quiet: true });
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [load, period]);
-
-  const runRecovery = React.useCallback(async () => {
-    if (running) return;
-    setRunning(true);
-    setError(null);
-    try {
-      await api.runBatch({ count: 50 });
-      await load(period);
-    } catch (caught) {
-      setError(
-        caught instanceof ApiError
-          ? caught
-          : new ApiError('The recovery run could not be completed.'),
-      );
-    } finally {
-      setRunning(false);
-    }
-  }, [running, load, period]);
 
   const money = summary?.money ?? null;
   const totalCases = summary?.total ?? 0;
@@ -192,7 +204,9 @@ export default function OverviewPage() {
               money is back or it is wiser to stop.
             </p>
           </div>
-          <div className="no-print flex shrink-0 items-center gap-2">
+          <div className="no-print flex shrink-0 flex-col items-end gap-2">
+            <LiveIndicator status={status} lastUpdated={lastUpdated} />
+            <div className="flex items-center gap-2">
             <PeriodSelector value={period} onChange={setPeriod} disabled={loading} />
             {hasData ? (
               <Button
@@ -204,6 +218,7 @@ export default function OverviewPage() {
                 Download report
               </Button>
             ) : null}
+            </div>
           </div>
         </div>
 
@@ -221,7 +236,7 @@ export default function OverviewPage() {
           ) : loading && !summary ? (
             <OverviewSkeleton />
           ) : !hasData ? (
-            <EmptyState onRun={() => void runRecovery()} running={running} />
+            <EmptyState />
           ) : (
             <div className="space-y-6">
               <RecoveredHeadline money={money!} cases={totalCases} loading={loading} />
@@ -381,7 +396,7 @@ function RecoveredHeadline({
             </p>
           </div>
 
-          <div className="flex shrink-0 gap-10">
+          <div className="flex shrink-0 flex-wrap gap-10">
             <Figure label="Recovery rate" value={formatPercent(money.recovery_rate)} />
             <Figure
               label="Active recoveries"
@@ -394,9 +409,17 @@ function RecoveredHeadline({
   );
 }
 
-function Figure({ label, value }: { label: string; value: string }) {
+function Figure({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+}) {
   return (
-    <div>
+    <div title={hint}>
       <p className="text-micro font-semibold uppercase tracking-wide text-ink-subtle">
         {label}
       </p>
@@ -513,22 +536,44 @@ function PromisesStrip({ promises }: { promises: PromiseListResponse }) {
   const counts = promises.status_breakdown;
   const states = ['promised', 'due_soon', 'fulfilled', 'overdue'] as const;
 
+  // How much of what was promised has actually arrived, and how much is still
+  // owed. A count of promises says nothing about whether the money came in;
+  // this is the figure a merchant is actually waiting on.
+  const promised = Number.parseFloat(promises.total_promised) || 0;
+  const paid = Number.parseFloat(promises.total_fulfilled) || 0;
+  const outstanding = Math.max(promised - paid, 0);
+  const share = promised > 0 ? (paid / promised) * 100 : 0;
+
   return (
     <Card className="animate-fade-up stagger-2">
       <div className="flex flex-wrap items-center gap-x-8 gap-y-4 p-5">
-        <div className="min-w-0">
+        <div className="min-w-[15rem] flex-1">
           <p className="text-micro font-semibold uppercase tracking-wide text-ink-subtle">
             Promises to pay
           </p>
           <p className="mt-1 text-sm text-ink-muted">
+            <span className="tabular font-medium text-recovered">
+              {formatInr(promises.total_fulfilled)}
+            </span>{' '}
+            received of{' '}
             <span className="tabular font-medium text-ink">
               {formatInr(promises.total_promised)}
             </span>{' '}
             promised ·{' '}
-            <span className="tabular font-medium text-recovered">
-              {formatInr(promises.total_fulfilled)}
+            <span className="tabular font-medium text-pending">
+              {formatInr(String(outstanding))}
             </span>{' '}
-            paid
+            still due
+          </p>
+          <div className="mt-2 flex h-1.5 w-full overflow-hidden rounded-full bg-line/70">
+            <div
+              className="h-full rounded-full bg-recovered transition-all duration-700"
+              // eslint-disable-next-line react/forbid-dom-props
+              {...{ style: { width: `${Math.min(share, 100)}%` } }}
+            />
+          </div>
+          <p className="tabular mt-1 text-micro text-ink-subtle">
+            {share.toFixed(0)}% of promised money received
           </p>
         </div>
 
@@ -605,9 +650,19 @@ function DirectionsPanel({ rows }: { rows: DirectionRow[] }) {
                   <span className="tabular text-micro text-ink-subtle">
                     {formatInrCompact(row.atRisk)} at risk
                   </span>
-                  <span className="tabular text-micro font-medium text-recovered">
-                    {formatInrCompact(row.recovered)} back
-                  </span>
+                  {/* Nothing recovered yet is not the same as nothing
+                      happening. Showing "₹0 back" against a full bar reads as
+                      a broken figure; "in progress" is what is actually true
+                      while Revora is still working the category. */}
+                  {Number.parseFloat(row.recovered) > 0 ? (
+                    <span className="tabular text-micro font-medium text-recovered">
+                      {formatInrCompact(row.recovered)} back
+                    </span>
+                  ) : (
+                    <span className="text-micro font-medium text-pending">
+                      In progress
+                    </span>
+                  )}
                 </div>
                 <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-line/70">
                   <div
@@ -648,32 +703,20 @@ function OverviewSkeleton() {
   );
 }
 
-function EmptyState({ onRun, running }: { onRun: () => void; running: boolean }) {
+function EmptyState() {
   return (
     <Card className="no-print animate-fade-up flex flex-col items-center px-6 py-20 text-center">
       <span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-line bg-surface-raised">
         <Activity className="h-6 w-6 text-accent" aria-hidden="true" />
       </span>
       <h2 className="mt-5 text-lg font-semibold tracking-tight text-ink">
-        No recovery runs yet
+        Watching for revenue at risk
       </h2>
       <p className="mt-2 max-w-md text-sm leading-relaxed text-ink-muted">
-        Run a recovery analysis to see how Revora identifies revenue at risk, decides what
-        to do about each case, and wins money back.
+        Revora is connected and monitoring. As payments fail, checkouts stall and
+        invoices age, it will work each case and the results will appear here — you do
+        not need to start anything.
       </p>
-      <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
-        <Button onClick={onRun} disabled={running}>
-          {running ? (
-            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-          ) : (
-            <Play className="h-4 w-4" aria-hidden="true" />
-          )}
-          {running ? 'Running recovery…' : 'Run recovery'}
-        </Button>
-        <Button asChild variant="ghost">
-          <Link href="/batch">Choose options first</Link>
-        </Button>
-      </div>
       <p className="mt-5 text-xs text-ink-subtle">
         Safe demo environment. No real payments or customer contacts.
       </p>

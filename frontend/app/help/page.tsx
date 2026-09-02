@@ -42,8 +42,8 @@ const DOCS: Array<{ q: string; a: string }> = [
     a: 'Every case goes through the same sequence: Revora spots it, works out the likely cause, chooses a recovery action, checks that action against your policy, carries it out, and verifies the outcome. Every step is recorded, so any decision can be explained afterwards.',
   },
   {
-    q: 'How do I run a recovery analysis?',
-    a: 'Open Run Recovery, choose how many cases to work and where recovery runs, and press Run Recovery. Results are saved, so you can reopen a past run without running it again.',
+    q: 'Do I need to start recovery?',
+    a: 'No. Revora works payment events as they arrive \u2014 failed charges, stalled checkouts, ageing invoices \u2014 and the results appear on your dashboard on their own. Recovery Runs shows a record of each batch it has worked.',
   },
   {
     q: 'How do recovery policies work?',

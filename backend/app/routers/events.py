@@ -187,6 +187,45 @@ def _sum_money(session: Session, column, *conditions) -> Decimal:
     return total.quantize(Decimal('0.01'))
 
 
+#: Event types that recur, and therefore have annualisable revenue.
+_RECURRING_TYPES = (EventType.SUBSCRIPTION_FAILED, EventType.MANDATE_FAILED)
+
+
+def _arr_retained(session: Session, scoped_ids) -> Decimal:
+    """Annualised recurring revenue retained through verified recovery.
+
+    Measured, not assumed. Each recovered recurring charge is annualised at the
+    cadence actually recorded on its event — monthly x12, quarterly x4, annual
+    x1. A case with no recorded cadence contributes NOTHING rather than being
+    treated as monthly, because guessing the cadence would fabricate the number
+    this figure exists to report.
+
+    One-off recoveries are excluded entirely. Recovering an overdue invoice is
+    real money, but it is not recurring revenue and counting it here would
+    overstate what the business can rely on next year.
+    """
+    total = Decimal("0.00")
+    rows = session.execute(
+        select(RiskEvent.raw_signal, OutcomeModel.amount_recovered)
+        .join(OutcomeModel, OutcomeModel.event_id == RiskEvent.id)
+        .where(
+            RiskEvent.id.in_(scoped_ids),
+            RiskEvent.type.in_(_RECURRING_TYPES),
+            OutcomeModel.resolved.in_(
+                (OutcomeResolution.RECOVERED, OutcomeResolution.PARTIALLY_RECOVERED)
+            ),
+        )
+    )
+    for raw_signal, recovered in rows:
+        if not recovered:
+            continue
+        period = (raw_signal or {}).get("billing_period_months")
+        if not isinstance(period, int) or period <= 0:
+            continue  # cadence unknown: contribute nothing rather than guess
+        total += recovered * (Decimal(12) / Decimal(period))
+    return total.quantize(Decimal("0.01"))
+
+
 def _money_summary(session: Session, scoped, status_breakdown: dict[str, int]) -> EventMoneySummary:
     """Authoritative totals over the filtered set, from the ledger."""
     scoped_ids = scoped(select(RiskEvent.id)).scalar_subquery()
@@ -227,6 +266,7 @@ def _money_summary(session: Session, scoped, status_breakdown: dict[str, int]) -
         return total.quantize(Decimal("0.01"))
 
     return EventMoneySummary(
+        arr_retained=str(_arr_retained(session, scoped_ids)),
         amount_at_risk=str(at_risk),
         amount_recovered=str(recovered),
         amount_lost=str(amount_where(OutcomeResolution.LOST)),

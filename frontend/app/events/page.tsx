@@ -9,6 +9,8 @@ import { STATUS_LABEL } from '../../components/StatusBadge';
 import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
 import { AppShell } from '../../components/ui/site-header';
+import { LiveIndicator } from '../../components/ui/live-status';
+import { useLiveRefresh } from '../../components/ui/use-live-data';
 import { cn } from '../../components/ui/utils';
 import { api, ApiError, formatCount } from '../../lib/api-client';
 import { eventTypeLabel } from '../../lib/labels';
@@ -89,29 +91,48 @@ function EventsFeed() {
     setOffset(0);
   }, [status, type, review, debounced]);
 
-  const load = React.useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    const query: EventListQuery = { limit: PAGE_SIZE, offset };
-    if (status) query.status = status;
-    if (type) query.type = type;
-    if (review !== 'all') query.needs_review = review === 'review';
-    if (debounced) query.q = debounced;
+  const load = React.useCallback(
+    async (quiet = false) => {
+      // A background refresh never shows a spinner and never clears the table.
+      if (!quiet) {
+        setLoading(true);
+        setError(null);
+      }
+      const query: EventListQuery = { limit: PAGE_SIZE, offset };
+      if (status) query.status = status;
+      if (type) query.type = type;
+      if (review !== 'all') query.needs_review = review === 'review';
+      if (debounced) query.q = debounced;
 
-    try {
-      setData(await api.listEvents(query));
-    } catch (caught) {
-      setError(
-        caught instanceof ApiError ? caught : new ApiError('Could not load events.'),
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [status, type, review, debounced, offset]);
+      try {
+        setData(await api.listEvents(query));
+        setError(null);
+        return true;
+      } catch (caught) {
+        // Keeps the previous rows: stale data beats an empty table.
+        if (!quiet) {
+          setError(
+            caught instanceof ApiError ? caught : new ApiError('Could not load events.'),
+          );
+        }
+        return false;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [status, type, review, debounced, offset],
+  );
 
-  React.useEffect(() => {
-    void load();
-  }, [load]);
+  // Revora works on its own; the shared hook keeps this page in step on the one
+  // application-wide interval. Filter changes re-key it, so a new filter
+  // refetches immediately rather than waiting for the next tick.
+  const { status: liveStatus, lastUpdated } = useLiveRefresh(load, [
+    status,
+    type,
+    review,
+    debounced,
+    offset,
+  ]);
 
   const hasFilters = Boolean(status || type || debounced) || review !== 'all';
   const clearFilters = () => {
@@ -131,9 +152,12 @@ function EventsFeed() {
       <main className="mx-auto max-w-[1400px] px-4 py-8 sm:px-6 lg:px-8">
         <div className="animate-fade-up flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-ink">
-              {type ? eventTypeLabel(type) : 'All recoveries'}
-            </h1>
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-2xl font-semibold tracking-tight text-ink">
+                {type ? eventTypeLabel(type) : 'All recoveries'}
+              </h1>
+              <LiveIndicator status={liveStatus} lastUpdated={lastUpdated} />
+            </div>
             <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-ink-muted">
               Every case Revora is working — what happened, why, and what it decided to
               do about it.

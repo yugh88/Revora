@@ -14,13 +14,13 @@ import {
   LayoutDashboard,
   Menu,
   MessageSquareText,
-  PlayCircle,
   RefreshCw,
   ShoppingCart,
   Bell,
   LifeBuoy,
   Settings,
   SlidersHorizontal,
+  Sparkles,
   TrendingUp,
   X,
   type LucideIcon,
@@ -82,7 +82,6 @@ const PRIMARY: NavGroup[] = [
     ],
   },
   { label: 'Promises to Pay', icon: HandCoins, href: '/promises' },
-  { label: 'Run Recovery', icon: PlayCircle, href: '/batch' },
   { label: 'Communications', icon: MessageSquare, href: '/communications' },
   { label: 'Recovery Messages', icon: MessageSquareText, href: '/scripts' },
   { label: 'Audit', icon: FileClock, href: '/audit' },
@@ -91,6 +90,7 @@ const PRIMARY: NavGroup[] = [
 
 /** Secondary group, below a divider. Product configuration and help. */
 const SECONDARY: NavGroup[] = [
+  { label: 'About Revora', icon: Sparkles, href: '/about' },
   { label: 'Settings', icon: Settings, href: '/settings' },
   { label: 'Help & Documentation', icon: LifeBuoy, href: '/help' },
 ];
@@ -223,10 +223,11 @@ function currentSection(pathname: string): string {
   if (pathname === '/') return 'Overview';
   if (pathname.startsWith('/events')) return 'Revenue Recovery';
   if (pathname.startsWith('/communications')) return 'Communications';
+  if (pathname.startsWith('/about')) return 'About Revora';
   if (pathname.startsWith('/settings')) return 'Settings';
   if (pathname.startsWith('/help')) return 'Help & Documentation';
   if (pathname.startsWith('/promises')) return 'Promises to Pay';
-  if (pathname.startsWith('/batch')) return 'Run Recovery';
+  if (pathname.startsWith('/batch')) return 'Recovery Runs';
   if (pathname.startsWith('/scripts')) return 'Recovery Messages';
   if (pathname.startsWith('/audit')) return 'Audit';
   if (pathname.startsWith('/policies')) return 'Policies';
@@ -410,12 +411,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </React.Suspense>
         </div>
 
+        {/* The merchant's own account, not a gateway picker. Which gateway
+            executes is an internal concern the backend already owns; putting a
+            selector here would ask a merchant to make a technical choice they
+            have no basis for. */}
         <div className="absolute inset-x-0 bottom-0 border-t border-line px-4 py-3">
-          <p className="text-micro uppercase tracking-wide text-ink-subtle">
-            Revenue recovery
-          </p>
-          <p className="mt-0.5 text-micro text-ink-subtle">
-            Detect · Diagnose · Decide · Recover
+          <p className="text-micro uppercase tracking-wide text-ink-subtle">Merchant</p>
+          <div className="mt-1.5 flex items-center gap-2">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent/10 text-[10px] font-bold text-accent ring-1 ring-accent/20">
+              R
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-xs font-medium text-ink">Razorpay</p>
+              <p className="truncate text-micro text-ink-subtle">Demo Merchant</p>
+            </div>
+          </div>
+          <p className="mt-1.5 flex items-center gap-1.5 text-micro text-ink-subtle">
+            <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-recovered" />
+            Connected · Test Mode
           </p>
         </div>
       </aside>

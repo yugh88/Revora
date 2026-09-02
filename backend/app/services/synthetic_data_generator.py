@@ -359,6 +359,18 @@ def generate_batch(
             "attempt_number": 1,
             "customer_name": customers[customer_id]["name"],
         }
+        # Billing cadence for the recurring event types.
+        #
+        # Added because ARR Retained cannot be computed honestly without it:
+        # annualising a recovered charge requires knowing how often that charge
+        # recurs, and assuming "monthly" for everything would be inventing the
+        # number rather than measuring it. Non-recurring events carry no cadence
+        # at all, so they contribute nothing to ARR — which is correct.
+        if event_type in (EventType.SUBSCRIPTION_FAILED, EventType.MANDATE_FAILED):
+            raw_signal["billing_period_months"] = _weighted_choice(
+                rng, ((1, 0.72), (3, 0.18), (12, 0.10))
+            )
+
         if error_code is not None:
             raw_signal["gateway_error_code"] = error_code
         if is_b2b:

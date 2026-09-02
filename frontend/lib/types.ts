@@ -182,6 +182,8 @@ export interface EventSummary {
 }
 
 export interface EventMoneySummary {
+  /** Annualised recurring revenue retained through verified recovery. */
+  arr_retained: string;
   amount_at_risk: string;
   amount_recovered: string;
   amount_lost: string;

@@ -8,6 +8,8 @@ import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
 import { AppShell } from '../../components/ui/site-header';
+import { LiveIndicator } from '../../components/ui/live-status';
+import { useLiveRefresh } from '../../components/ui/use-live-data';
 import { cn } from '../../components/ui/utils';
 import { api, ApiError, formatCount, formatDateTime, formatRelative } from '../../lib/api-client';
 import { auditActionLabel, stageLabel } from '../../lib/labels';
@@ -54,24 +56,41 @@ export default function AuditPage() {
     setOffset(0);
   }, [stage, debounced]);
 
-  const load = React.useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    const query: AuditQuery = { limit: PAGE_SIZE, offset, order: 'desc' };
-    if (stage) query.stage = stage;
-    if (debounced) query.event_id = debounced;
-    try {
-      setData(await api.listAudit(query));
-    } catch (caught) {
-      setError(caught instanceof ApiError ? caught : new ApiError('Could not load the audit log.'));
-    } finally {
-      setLoading(false);
-    }
-  }, [stage, debounced, offset]);
+  const load = React.useCallback(
+    async (quiet = false) => {
+      if (!quiet) {
+        setLoading(true);
+        setError(null);
+      }
+      const query: AuditQuery = { limit: PAGE_SIZE, offset, order: 'desc' };
+      if (stage) query.stage = stage;
+      if (debounced) query.event_id = debounced;
+      try {
+        setData(await api.listAudit(query));
+        setError(null);
+        return true;
+      } catch (caught) {
+        if (!quiet) {
+          setError(
+            caught instanceof ApiError
+              ? caught
+              : new ApiError('Could not load the audit log.'),
+          );
+        }
+        return false;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [stage, debounced, offset],
+  );
 
-  React.useEffect(() => {
-    void load();
-  }, [load]);
+  // New audit records appear as Revora works, without anyone reloading.
+  const { status: liveStatus, lastUpdated } = useLiveRefresh(load, [
+    stage,
+    debounced,
+    offset,
+  ]);
 
   const total = data?.total ?? 0;
   const pageEnd = Math.min(offset + (data?.returned ?? 0), total);
@@ -81,6 +100,7 @@ export default function AuditPage() {
       <main className="mx-auto max-w-[1400px] px-4 py-8 sm:px-6 lg:px-8">
         <div className="animate-fade-up">
           <h1 className="text-2xl font-semibold tracking-tight text-ink">Audit</h1>
+            <LiveIndicator status={liveStatus} lastUpdated={lastUpdated} />
           <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-ink-muted">
             Every step Revora took on your behalf, in order and never edited — so any
             recovery can be explained after the fact.

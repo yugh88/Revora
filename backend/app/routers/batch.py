@@ -183,6 +183,66 @@ def _unit_interval(*parts: Any) -> float:
     return int.from_bytes(digest[:8], "big") / float(1 << 64)
 
 
+def verify_pending_cases(
+    session: Session,
+    gateway: PaymentGateway,
+    *,
+    now: datetime,
+    limit: int = 50,
+) -> int:
+    """Re-check cases that are waiting on the gateway, and settle any resolved.
+
+    Some actions do not produce an answer immediately. ``await_gateway_auto_retry``
+    in particular means "Razorpay will retry this itself" — the correct move for
+    a failed subscription, and one whose result only exists later.
+
+    Nothing used to perform that later check. Every subscription therefore sat
+    at PENDING for ever and the category reported zero recovered, not because
+    recovery failed but because nobody ever looked. This is the look.
+
+    Returns the number of cases settled. Read-then-write: the gateway is the
+    authority on whether the money arrived, and ``upsert_outcome`` remains the
+    only thing that records it.
+    """
+    settled = 0
+    candidates = list(
+        session.execute(
+            select(RiskEvent)
+            .join(Outcome, Outcome.event_id == RiskEvent.id)
+            .where(
+                Outcome.resolved == OutcomeResolution.PENDING,
+                RiskEvent.status.notin_(
+                    (EventStatus.RECOVERED, EventStatus.UNRECOVERABLE)
+                ),
+            )
+            .limit(limit)
+        ).scalars()
+    )
+
+    for event in candidates:
+        if not event.source_ref:
+            continue
+        try:
+            upstream = gateway.check_status(
+                event.source_ref, EventType(event.type), now=now
+            )
+        except Exception:  # noqa: BLE001
+            # One unreachable case must not stop the sweep for the rest.
+            logger.exception(
+                "pending_verification_failed",
+                extra={"event_id": event.id, "stage": "verification"},
+            )
+            continue
+
+        if upstream.is_resolved_externally:
+            _settle_recovered_externally(session, event, upstream.status.value, now=now)
+            settled += 1
+
+    if settled:
+        session.commit()
+    return settled
+
+
 def _record_agent_contact(
     session: Session,
     event: RiskEvent,
@@ -230,6 +290,19 @@ def _record_agent_contact(
             now=now,
         )
 
+        body_text = ""
+        if result.compliant:
+            from app.engine.retrieval import retrieve_context
+            from app.services.hinglish_llm import enhance_script
+
+            body_text = enhance_script(
+                result=result,
+                stopping_state=session.get(StoppingRuleState, event.id),
+                policy=policy_engine.resolve_policy(session, event),
+                now=now,
+                context=retrieve_context(session, event, now=now).as_prompt_block(),
+            )
+
         session.add(
             CommunicationLog(
                 event_id=event.id,
@@ -239,7 +312,7 @@ def _record_agent_contact(
                     if result.compliant
                     else CommunicationStatus.BLOCKED
                 ),
-                body=result.script if result.compliant else "",
+                body=body_text,
                 reason=(
                     diagnosis.root_cause_code.value if diagnosis else "unknown"
                 ),
