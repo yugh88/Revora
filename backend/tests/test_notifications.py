@@ -172,15 +172,25 @@ class TestAlertsCannotOutliveTheirCause:
         stored.promised_date = utcnow() - timedelta(days=1)
         session.commit()
 
-        before = {i["kind"] for i in client.get("/notifications").json()["items"]}
-        assert "promise_overdue" in before
+        # Asserted about THIS promise specifically, by its own alert id.
+        #
+        # The global "no overdue alerts at all" version was only ever true
+        # because batches produced no promises of their own. They now do, and
+        # some are legitimately overdue — so a global assertion would be
+        # claiming those alerts are wrong when they are correct. The property
+        # under test is unchanged and the check is now stricter: paying a
+        # promise clears ITS alert.
+        mine_overdue = f"promise_overdue_{promise['id']}"
+        mine_fulfilled = f"promise_kept_{promise['id']}"
+
+        before = {i["id"] for i in client.get("/notifications").json()["items"]}
+        assert mine_overdue in before
 
         client.post(f"/promises/{promise['id']}/fulfil", json={})
 
-        after = client.get("/notifications").json()["items"]
-        overdue = [i for i in after if i["kind"] == "promise_overdue"]
-        assert overdue == []
-        assert any(i["kind"] == "promise_fulfilled" for i in after)
+        after = {i["id"] for i in client.get("/notifications").json()["items"]}
+        assert mine_overdue not in after
+        assert mine_fulfilled in after
 
 
 class TestReadOnly:

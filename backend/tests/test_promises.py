@@ -28,6 +28,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db, utcnow
 from app.engine import promise_tracker, template_engine
+from app.engine.promise_tracker import display_status
 from app.engine.template_engine import IST
 from app.enums import EventStatus, OutcomeResolution, PromiseStatus
 from app.main import app
@@ -785,7 +786,16 @@ class TestAnOpenPromisePausesRecovery:
         from app.engine.diagnosis_engine import DiagnosisResult
         from app.models import Diagnosis, StoppingRuleState
 
-        promise = list(session.execute(select(PromiseToPay)).scalars())[0]
+        # Pick a promise that is genuinely still OPEN, which is the precondition
+        # this class is named for. Taking the first row happened to work while
+        # every promise was dated in the future; promises now carry realistic
+        # dates drawn from their case's own timeline, so some are already
+        # overdue — and "contact allowed" is the correct answer for those.
+        promise = next(
+            p
+            for p in session.execute(select(PromiseToPay)).scalars()
+            if display_status(p) in ("promised", "due_soon")
+        )
         event = session.get(RiskEvent, promise.event_id)
         stored = session.get(Diagnosis, event.id)
         state = session.get(StoppingRuleState, event.id)

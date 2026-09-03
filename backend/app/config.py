@@ -37,10 +37,14 @@ class Settings(BaseSettings):
     #: the screen stays current without the engine being rushed.
     autonomous_interval_seconds: int = 12
 
-    #: How many events one autonomous pass takes on. Small on purpose: a steady
-    #: trickle reads like a live system, whereas fifty at once reads like a
-    #: batch job someone triggered.
-    autonomous_batch_size: int = 3
+    #: How many events one autonomous pass takes on.
+    #:
+    #: Five, because the generator assigns event types by cycling through them
+    #: in order — so a pass of three could only ever produce the first three
+    #: kinds, leaving invoices and mandates permanently unreachable however long
+    #: the system ran. One full cycle per pass gives every category a fair
+    #: chance while keeping the trickle small enough to read as live.
+    autonomous_batch_size: int = 5
 
     # --- Hinglish language layer (optional) ------------------------------
     #
@@ -87,10 +91,14 @@ class Settings(BaseSettings):
     #: the screen stays current without the engine being rushed.
     autonomous_interval_seconds: int = 12
 
-    #: How many events one autonomous pass takes on. Small on purpose: a steady
-    #: trickle reads like a live system, whereas fifty at once reads like a
-    #: batch job someone triggered.
-    autonomous_batch_size: int = 3
+    #: How many events one autonomous pass takes on.
+    #:
+    #: Five, because the generator assigns event types by cycling through them
+    #: in order — so a pass of three could only ever produce the first three
+    #: kinds, leaving invoices and mandates permanently unreachable however long
+    #: the system ran. One full cycle per pass gives every category a fair
+    #: chance while keeping the trickle small enough to read as live.
+    autonomous_batch_size: int = 5
 
     # --- Hinglish language layer (optional) ------------------------------
     #

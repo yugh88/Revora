@@ -81,6 +81,7 @@ async def _autonomous_recovery_loop(settings) -> None:
     not take the API down with it.
     """
     from app.database import SessionLocal
+    from app.engine.promise_tracker import evaluate_overdue
     from app.routers.batch import build_gateway, run_batch, verify_pending_cases
     from app.schemas.batch import BatchRequest
 
@@ -125,6 +126,10 @@ async def _autonomous_recovery_loop(settings) -> None:
                     # on new ones. Money that has already arrived should be
                     # recorded before Revora goes looking for more work.
                     verify_pending_cases(session, gateway, now=utcnow())
+                    # Settle promises whose date has passed. Without this a
+                    # promise stays "pending" for ever and the lifecycle only
+                    # ever shows its first state.
+                    evaluate_overdue(session, now=utcnow())
                     return run_batch(
                         session,
                         BatchRequest(count=size, seed=seed),

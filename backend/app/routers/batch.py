@@ -420,7 +420,18 @@ def _simulate_customer_reply(
         text = _REPLY_POOL[digest[1] % len(_REPLY_POOL)]
         if not text:
             return  # the customer did not answer at all
-        reading = interpret_response(text, now=now)
+
+        # The conversation happened when the case did, not now.
+        #
+        # These events are dated across the previous weeks. A customer replying
+        # "kal payment kar dunga" to a contact about a thirty-day-old failure
+        # meant the day after THAT conversation — so the promise falls in the
+        # past and its outcome is already known. Interpreting every reply
+        # against the wall clock instead put every promise in the future, which
+        # is why none was ever fulfilled or overdue however long the system ran.
+        spoke_at = min(event.detected_at or now, now)
+
+        reading = interpret_response(text, now=spoke_at)
 
         contact.customer_response = {
             "promise_to_pay": CustomerResponse.PROMISED_TO_PAY,
@@ -441,7 +452,7 @@ def _simulate_customer_reply(
                 event,
                 promised_amount=event.amount,
                 promised_date=reading.promised_date,
-                now=now,
+                now=spoke_at,
             )
             contact.promise_id = promise.id
         except PromiseError:
