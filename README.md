@@ -43,7 +43,7 @@ a dashboard, not by rounding.
 ## Action
 
 ### It runs on its own
-No button. A background task processes payment events as they arrive, through the real
+A background task processes payment events as they arrive, through the real
 pipeline — detect, diagnose, decide, gate, act, verify. The dashboard updates itself.
 
 ### The rules that never bend
@@ -67,12 +67,12 @@ guessing one would create a commitment nobody made.
 | Component | Role | Authority |
 |---|---|---|
 | Rule-based diagnosis | Determines root cause | **Authoritative** |
-| Decision tree classifier | Second opinion, recorded | **None** — advisory |
+| Decision tree classifier | Second opinion, recorded | advisory |
 | Probability engine | Ranks actions by expected value | Proposes only |
 | Policy engine · stopping rules | Enforce merchant limits | **Authoritative** |
-| Retrieval (RAG) | Supplies customer history | **None** — context only |
-| LangGraph | Expresses workflow shape | **None** — orchestration |
-| Ollama · Mistral | Rewrites approved copy into Hinglish | **None** — wording only |
+| Retrieval (RAG) | Supplies customer history | context only |
+| LangGraph | Expresses workflow shape | orchestration |
+| Ollama · Mistral | Rewrites approved copy into Hinglish | wording only |
 
 The language model receives a script compliance has already approved, and its output is
 re-checked before use. If it is slow, offline, or invents a fact, the deterministic
@@ -81,7 +81,7 @@ template is used unchanged. **A recovery run cannot fail because of it.**
 ## Result
 
 ```
-1,168 backend tests passing
+1,181 backend tests passing
 ```
 
 The tests that matter most assert what the system **cannot** do:
@@ -167,6 +167,8 @@ app under **About Revora**, where hovering a stage reveals its stack.
 ![Revora architecture](./docs/architecture.png)
 
 ## Demo notes
+
+- **Demo - Video:** [Revora](https://drive.google.com/file/d/12FN8A-OA9NR0EC_7g4NkigOEUz1tT9jx/view?usp=sharing)
 
 - **No customer is ever contacted.** No email, SMS or voice provider is wired in. Every
   send is recorded as simulated, and the status vocabulary contains no "sent" or
