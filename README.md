@@ -60,6 +60,28 @@ pipeline — detect, diagnose, decide, gate, act, verify. The dashboard updates 
 
 **Every consequential action is explainable.** The system records what it proposed, why it proposed it, which policy allowed it, what evidence supported it, and whether a human approved it. The resulting state is auditable rather than inferred.
 
+### Reports you can actually file
+
+Recovery and audit reports are generated from Revora's authoritative data rather than
+from a browser screenshot or dashboard estimate.
+
+From **Audit** and **All Recoveries**, a merchant can choose:
+
+- Last 1 day
+- Last 1 week
+- Last 1 month
+- A custom date range
+
+Revora generates a complete PDF containing the selected period, recovery or audit
+summary, relevant cases, customer names, amounts, statuses, recovery actions,
+diagnosis and reasoning, outcomes, timestamps, and audit decisions.
+
+The report is generated server-side from the same data used by the dashboard, so the
+document remains consistent with the system's actual recovery state.
+
+Empty selections produce a clean report stating that no records were found rather than
+fabricating results.
+
 ### Where the AI is, and is not
 
 | Component | Role | Authority |
@@ -161,7 +183,7 @@ template is used unchanged. **A recovery run cannot fail because of it.**
 ## Result
 
 ```
-1,181 backend tests passing
+1,213 backend tests passing
 ```
 
 The tests that matter most assert what the system **cannot** do:
