@@ -50,3 +50,8 @@ langgraph==1.2.11
 # Revora runs correctly with no Redis present; the database remains the
 # source of truth for every rupee.
 redis==8.1.0
+
+# PDF reports. Pure Python: no headless browser, no system libraries and no
+# paid service, so a report can be generated on a server with neither a display
+# nor network access.
+reportlab==4.4.10

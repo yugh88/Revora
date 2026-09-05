@@ -290,6 +290,37 @@ export const api = {
     });
   },
 
+  /**
+   * Download a report as a PDF.
+   *
+   * The file is built by the backend from the same rows the dashboard reads,
+   * so the document and the screen cannot disagree. The browser only saves it.
+   *
+   * Returns the blob rather than triggering the save itself, so the caller
+   * decides what to do on failure — a half-downloaded report should surface an
+   * error, not an empty file.
+   */
+  async downloadReport(
+    kind: 'recovery' | 'audit',
+    range: { days?: number; from?: string; to?: string },
+  ): Promise<Blob> {
+    const query = buildQuery({
+      days: range.days,
+      date_from: range.from,
+      date_to: range.to,
+    });
+    const response = await fetch(`${API_BASE_URL}/reports/${kind}.pdf${query}`, {
+      method: 'GET',
+      headers: { Accept: 'application/pdf' },
+    });
+    if (!response.ok) {
+      throw new ApiError('The report could not be generated.', {
+        status: response.status,
+      });
+    }
+    return response.blob();
+  },
+
   /** GET /notifications — derived merchant alerts. Read-only. */
   listNotifications(): Promise<NotificationListResponse> {
     return request<NotificationListResponse>('/notifications', { method: 'GET' });

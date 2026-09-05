@@ -1,5 +1,5 @@
-import type { Metadata, Viewport } from 'next';
 import { Analytics } from '@vercel/analytics/next';
+import type { Metadata, Viewport } from 'next';
 
 import { ThemeProvider } from '../components/ui/theme-provider';
 import { TooltipProvider } from '../components/ui/tooltip';

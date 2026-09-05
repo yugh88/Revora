@@ -15,14 +15,25 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db, utcnow
 from app.enums import AuditStage, EventType, OutcomeResolution
-from app.models import AuditLog, Outcome, PromiseToPay, RiskEvent
+from app.engine.promise_tracker import display_status
+from app.models import (
+    AuditLog,
+    CommunicationLog,
+    Decision,
+    Diagnosis,
+    Merchant,
+    Outcome,
+    PromiseToPay,
+    RiskEvent,
+)
+from app.services.report_pdf import render_audit_pdf, render_recovery_pdf
 
 logger = logging.getLogger("revora.reports")
 
@@ -71,24 +82,59 @@ class AuditReport(BaseModel):
     cases_touched: int
 
 
-def _window(days: int | None, now: datetime) -> tuple[datetime | None, str]:
-    """Resolve a period into a bound and a label a merchant would recognise."""
+PRESET_LABELS = {
+    1: "Last day",
+    7: "Last week",
+    30: "Last month",
+    90: "Last 3 months",
+    180: "Last 6 months",
+    365: "Last 12 months",
+}
+
+
+def _as_utc(moment: datetime) -> datetime:
+    """Read a naive bound as UTC rather than rejecting it.
+
+    A report is generated from a date a person picked in a browser; refusing it
+    over a missing timezone would surface an error they cannot act on.
+    """
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+def _window(
+    days: int | None,
+    now: datetime,
+    *,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+) -> tuple[datetime | None, datetime, str]:
+    """Resolve a period into bounds and a label a merchant would recognise.
+
+    An explicit range wins over a preset: if someone picked dates, those are the
+    dates. ``days`` remains the preset path, so existing callers are unchanged.
+    """
+    if date_from or date_to:
+        start = _as_utc(date_from) if date_from else None
+        end = _as_utc(date_to) if date_to else now
+        if start and end < start:
+            start, end = end, start
+        label = (
+            f"{start.date().isoformat()} to {end.date().isoformat()}"
+            if start
+            else f"Up to {end.date().isoformat()}"
+        )
+        return start, end, label
+
     if not days:
-        return None, "All time"
-    labels = {
-        1: "Last day",
-        7: "Last week",
-        30: "Last month",
-        90: "Last 3 months",
-        180: "Last 6 months",
-        365: "Last 12 months",
-    }
-    return now - timedelta(days=days), labels.get(days, f"Last {days} days")
+        return None, now, "All time"
+    return now - timedelta(days=days), now, PRESET_LABELS.get(days, f"Last {days} days")
 
 
 @router.get("/reports/recovery", response_model=RecoveryReport, summary="Recovery report")
 def recovery_report(
     days: int | None = Query(default=None, ge=1, le=3650),
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
     category: EventType | None = Query(default=None),
     session: Session = Depends(get_db),
 ) -> RecoveryReport:
@@ -101,7 +147,7 @@ def recovery_report(
     from app.routers.events import _money_summary
 
     now = utcnow()
-    since, label = _window(days, now)
+    since, until, label = _window(days, now, date_from=date_from, date_to=date_to)
 
     def scoper(event_type: EventType | None):
         """Build the filter `_money_summary` expects.
@@ -114,6 +160,8 @@ def recovery_report(
         def apply(stmt):
             if since is not None:
                 stmt = stmt.where(RiskEvent.detected_at >= since)
+            if until is not None:
+                stmt = stmt.where(RiskEvent.detected_at <= until)
             if event_type is not None:
                 stmt = stmt.where(RiskEvent.type == event_type)
             return stmt
@@ -159,7 +207,7 @@ def recovery_report(
         generated_at=now.isoformat(),
         period_label=label,
         period_from=since.isoformat() if since else None,
-        period_to=now.isoformat(),
+        period_to=until.isoformat(),
         total_cases=len(overall_ids),
         amount_at_risk=money.amount_at_risk,
         amount_recovered=money.amount_recovered,
@@ -177,6 +225,8 @@ def recovery_report(
 @router.get("/reports/audit", response_model=AuditReport, summary="Audit report")
 def audit_report(
     days: int | None = Query(default=None, ge=1, le=3650),
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
     stage: AuditStage | None = Query(default=None),
     session: Session = Depends(get_db),
 ) -> AuditReport:
@@ -186,11 +236,13 @@ def audit_report(
     error: "nothing happened last Tuesday" is a legitimate answer.
     """
     now = utcnow()
-    since, label = _window(days, now)
+    since, until, label = _window(days, now, date_from=date_from, date_to=date_to)
 
     stmt = select(AuditLog)
     if since is not None:
         stmt = stmt.where(AuditLog.timestamp >= since)
+    if until is not None:
+        stmt = stmt.where(AuditLog.timestamp <= until)
     if stage is not None:
         stmt = stmt.where(AuditLog.stage == stage)
 
@@ -202,7 +254,7 @@ def audit_report(
         generated_at=now.isoformat(),
         period_label=label,
         period_from=since.isoformat() if since else None,
-        period_to=now.isoformat(),
+        period_to=until.isoformat(),
         total_entries=len(entries),
         by_stage=[
             AuditReportRow(label=name, entries=count)
@@ -214,3 +266,214 @@ def audit_report(
         ],
         cases_touched=len({entry.event_id for entry in entries if entry.event_id}),
     )
+
+
+# --------------------------------------------------------------------------- #
+# PDF
+# --------------------------------------------------------------------------- #
+
+
+def _business_name(session: Session) -> str:
+    """Whose report this is. Falls back rather than failing."""
+    merchant = session.execute(select(Merchant).limit(1)).scalar_one_or_none()
+    return getattr(merchant, "name", None) or "Revora Demo Merchant"
+
+
+def _case_details(session: Session, event_ids: list[str], limit: int) -> list[dict]:
+    """Gather the judgement behind each case, for the detail section.
+
+    Reads the same rows the drill-down reads. Capped, because a report has to
+    stay openable — the caller tells the reader when it truncated.
+    """
+    details: list[dict] = []
+    events = list(
+        session.execute(
+            select(RiskEvent)
+            .where(RiskEvent.id.in_(event_ids))
+            .order_by(RiskEvent.detected_at.desc())
+            .limit(limit)
+        ).scalars()
+    )
+
+    for event in events:
+        raw = event.raw_signal if isinstance(event.raw_signal, dict) else {}
+        diagnosis = session.get(Diagnosis, event.id)
+        decisions = list(
+            session.execute(
+                select(Decision)
+                .where(Decision.event_id == event.id)
+                .order_by(Decision.decided_at.desc())
+            ).scalars()
+        )
+        outcome = session.get(Outcome, event.id)
+        contacts = list(
+            session.execute(
+                select(CommunicationLog)
+                .where(CommunicationLog.event_id == event.id)
+                .order_by(CommunicationLog.created_at.desc())
+            ).scalars()
+        )
+        promise = session.execute(
+            select(PromiseToPay)
+            .where(PromiseToPay.event_id == event.id)
+            .order_by(PromiseToPay.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        audit = list(
+            session.execute(
+                select(AuditLog)
+                .where(AuditLog.event_id == event.id)
+                .order_by(AuditLog.timestamp)
+            ).scalars()
+        )
+
+        details.append({
+            "event": {
+                "customer_name": raw.get("customer_name") or event.customer_id,
+                "type": event.type.value,
+                "amount": str(event.amount),
+                "status": event.status.value,
+                "detected_at": event.detected_at.isoformat(),
+            },
+            "diagnosis": (
+                {"root_cause": diagnosis.root_cause_code.value} if diagnosis else None
+            ),
+            "decisions": [
+                {"action_code": d.action_code, "policy_result": d.policy_result}
+                for d in decisions
+            ],
+            "outcome": (
+                {
+                    "resolved": outcome.resolved.value,
+                    "amount_recovered": str(outcome.amount_recovered),
+                }
+                if outcome
+                else None
+            ),
+            "communications": [
+                {
+                    "channel": c.channel.value,
+                    "status": c.status.value,
+                    "body": c.body,
+                    "blocked_reason": c.blocked_reason,
+                    "reply_text": c.reply_text,
+                }
+                for c in contacts
+            ],
+            "promise": (
+                {
+                    "promised_amount": str(promise.promised_amount),
+                    "promised_date": promise.promised_date.isoformat(),
+                    "status": display_status(promise),
+                }
+                if promise
+                else None
+            ),
+            "audit": [{"action": a.action, "stage": a.stage.value} for a in audit],
+        })
+    return details
+
+
+def _pdf_response(payload: bytes, name: str) -> Response:
+    return Response(
+        content=payload,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )
+
+
+@router.get(
+    "/reports/recovery.pdf",
+    summary="Recovery report as a PDF",
+    response_class=Response,
+)
+def recovery_report_pdf(
+    days: int | None = Query(default=None, ge=1, le=3650),
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
+    category: EventType | None = Query(default=None),
+    detail_limit: int = Query(default=60, ge=0, le=200),
+    session: Session = Depends(get_db),
+) -> Response:
+    """The recovery report, laid out for printing or filing.
+
+    Built from the SAME `recovery_report` the dashboard reads, so the document
+    and the screen cannot disagree. This endpoint only chooses a layout.
+    """
+    report = recovery_report(
+        days=days, date_from=date_from, date_to=date_to,
+        category=category, session=session,
+    )
+
+    now = utcnow()
+    since, until, _ = _window(days, now, date_from=date_from, date_to=date_to)
+    stmt = select(RiskEvent.id)
+    if since is not None:
+        stmt = stmt.where(RiskEvent.detected_at >= since)
+    if until is not None:
+        stmt = stmt.where(RiskEvent.detected_at <= until)
+    if category is not None:
+        stmt = stmt.where(RiskEvent.type == category)
+    ids = list(session.execute(stmt).scalars())
+
+    payload = render_recovery_pdf(
+        report,
+        _case_details(session, ids, detail_limit) if detail_limit else [],
+        business=_business_name(session),
+        generated=now,
+    )
+    stamp = now.strftime("%Y-%m-%d")
+    return _pdf_response(payload, f"revora-recovery-{stamp}.pdf")
+
+
+@router.get(
+    "/reports/audit.pdf", summary="Audit report as a PDF", response_class=Response
+)
+def audit_report_pdf(
+    days: int | None = Query(default=None, ge=1, le=3650),
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
+    stage: AuditStage | None = Query(default=None),
+    detail_limit: int = Query(default=300, ge=0, le=2000),
+    session: Session = Depends(get_db),
+) -> Response:
+    """The audit trail for a period, laid out for filing."""
+    report = audit_report(
+        days=days, date_from=date_from, date_to=date_to, stage=stage, session=session
+    )
+
+    now = utcnow()
+    since, until, _ = _window(days, now, date_from=date_from, date_to=date_to)
+    stmt = select(AuditLog).order_by(AuditLog.timestamp.desc())
+    if since is not None:
+        stmt = stmt.where(AuditLog.timestamp >= since)
+    if until is not None:
+        stmt = stmt.where(AuditLog.timestamp <= until)
+    if stage is not None:
+        stmt = stmt.where(AuditLog.stage == stage)
+
+    rows: list[dict] = []
+    if detail_limit:
+        names: dict[str, str] = {}
+        for entry in session.execute(stmt.limit(detail_limit)).scalars():
+            name = "—"
+            if entry.event_id:
+                if entry.event_id not in names:
+                    event = session.get(RiskEvent, entry.event_id)
+                    raw = event.raw_signal if event and isinstance(event.raw_signal, dict) else {}
+                    names[entry.event_id] = str(
+                        raw.get("customer_name") or (event.customer_id if event else "—")
+                    )
+                name = names[entry.event_id]
+            rows.append({
+                "timestamp": entry.timestamp.isoformat(),
+                "customer_name": name,
+                "stage": entry.stage.value,
+                "action": entry.action,
+            })
+
+    payload = render_audit_pdf(
+        report, rows, business=_business_name(session), generated=now
+    )
+    stamp = now.strftime("%Y-%m-%d")
+    return _pdf_response(payload, f"revora-audit-{stamp}.pdf")

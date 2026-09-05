@@ -2,11 +2,12 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { AlertCircle, ArrowRight, FileClock, Loader2, RotateCcw, X } from 'lucide-react';
+import { AlertCircle, ArrowRight, Download, FileClock, Loader2, RotateCcw, X } from 'lucide-react';
 
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
+import { ReportDialog } from '../../components/ReportDialog';
 import { AppShell } from '../../components/ui/site-header';
 import { LiveIndicator } from '../../components/ui/live-status';
 import { useLiveRefresh } from '../../components/ui/use-live-data';
@@ -86,6 +87,8 @@ export default function AuditPage() {
   );
 
   // New audit records appear as Revora works, without anyone reloading.
+  const [reportOpen, setReportOpen] = React.useState(false);
+
   const { status: liveStatus, lastUpdated } = useLiveRefresh(load, [
     stage,
     debounced,
@@ -97,10 +100,25 @@ export default function AuditPage() {
 
   return (
     <AppShell>
+      <ReportDialog
+        kind="audit"
+        title="Every step Revora took, for a period you choose"
+        open={reportOpen}
+        onClose={() => setReportOpen(false)}
+      />
       <main className="mx-auto max-w-[1400px] px-4 py-8 sm:px-6 lg:px-8">
         <div className="animate-fade-up">
           <h1 className="text-2xl font-semibold tracking-tight text-ink">Audit</h1>
             <LiveIndicator status={liveStatus} lastUpdated={lastUpdated} />
+            <Button
+              variant="secondary"
+              size="sm"
+              className="ml-auto"
+              onClick={() => setReportOpen(true)}
+            >
+              <Download className="h-3.5 w-3.5" aria-hidden="true" />
+              Download report
+            </Button>
           <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-ink-muted">
             Every step Revora took on your behalf, in order and never edited — so any
             recovery can be explained after the fact.

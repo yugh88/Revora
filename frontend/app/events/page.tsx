@@ -2,12 +2,13 @@
 
 import * as React from 'react';
 import { useSearchParams } from 'next/navigation';
-import { AlertCircle, Inbox, Loader2, RotateCcw, Search, X } from 'lucide-react';
+import { AlertCircle, Download, Inbox, Loader2, RotateCcw, Search, X } from 'lucide-react';
 
 import { EventTable } from '../../components/EventTable';
 import { STATUS_LABEL } from '../../components/StatusBadge';
 import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
+import { ReportDialog } from '../../components/ReportDialog';
 import { AppShell } from '../../components/ui/site-header';
 import { LiveIndicator } from '../../components/ui/live-status';
 import { useLiveRefresh } from '../../components/ui/use-live-data';
@@ -126,6 +127,8 @@ function EventsFeed() {
   // Revora works on its own; the shared hook keeps this page in step on the one
   // application-wide interval. Filter changes re-key it, so a new filter
   // refetches immediately rather than waiting for the next tick.
+  const [reportOpen, setReportOpen] = React.useState(false);
+
   const { status: liveStatus, lastUpdated } = useLiveRefresh(load, [
     status,
     type,
@@ -148,6 +151,12 @@ function EventsFeed() {
 
   return (
     <AppShell>
+      <ReportDialog
+        kind="recovery"
+        title="Recovery cases and the judgement behind them"
+        open={reportOpen}
+        onClose={() => setReportOpen(false)}
+      />
 
       <main className="mx-auto max-w-[1400px] px-4 py-8 sm:px-6 lg:px-8">
         <div className="animate-fade-up flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
@@ -157,6 +166,14 @@ function EventsFeed() {
                 {type ? eventTypeLabel(type) : 'All recoveries'}
               </h1>
               <LiveIndicator status={liveStatus} lastUpdated={lastUpdated} />
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setReportOpen(true)}
+              >
+                <Download className="h-3.5 w-3.5" aria-hidden="true" />
+                Download report
+              </Button>
             </div>
             <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-ink-muted">
               Every case Revora is working — what happened, why, and what it decided to
