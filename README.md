@@ -48,32 +48,112 @@ pipeline — detect, diagnose, decide, gate, act, verify. The dashboard updates 
 
 ### The rules that never bend
 
-**Policy is authoritative.** Scoring proposes, policy disposes. A high-scoring action the
-merchant forbids does not happen, and no model, context or retry logic can appeal it.
+**Policy is authoritative.** Scoring proposes, policy disposes. A high-scoring action the merchant forbids does not happen, and no model, context, or retry logic can appeal it.
 
-**Money is counted once.** One function records a rupee as recovered. Amounts are integer
-paise, serialised as exact decimal strings, never floats. Recovered + in progress +
-written off always equals the amount at risk, to the paisa — asserted by test.
+**Humans remain in control.** Actions that cross a defined approval threshold do not execute autonomously. The system pauses, presents the proposed action with its supporting evidence, and requires explicit human approval before anything consequential happens. No approval means no execution.
 
-**Compliance is a gate, not a warning.** A message failing any check is not written at
-all. There is no draft to override and no text to copy out.
+**Money is counted once.** One function records a rupee as recovered. Amounts are integer paise, serialised as exact decimal strings, never floats. recovered + in progress + written off always equals the amount at risk, to the paisa — asserted by test.
 
-**Nothing is invented.** No promised date the customer did not state, no delivery receipt,
-no figure the ledger cannot support. *"I'll pay soon"* records intent and **no date** —
-guessing one would create a commitment nobody made.
+**Compliance is a gate, not a warning.** A message failing any check is not written at all. There is no draft to override and no text to copy out.
+
+**Nothing is invented.** No promised date the customer did not state, no delivery receipt, no figure the ledger cannot support. “I’ll pay soon” records intent and no date — guessing one would create a commitment nobody made.
+
+**Every consequential action is explainable.** The system records what it proposed, why it proposed it, which policy allowed it, what evidence supported it, and whether a human approved it. The resulting state is auditable rather than inferred.
 
 ### Where the AI is, and is not
 
 | Component | Role | Authority |
 |---|---|---|
-| Rule-based diagnosis | Determines root cause | **Authoritative** |
-| Decision tree classifier | Second opinion, recorded | advisory |
-| Probability engine | Ranks actions by expected value | Proposes only |
-| Policy engine · stopping rules | Enforce merchant limits | **Authoritative** |
-| Retrieval (RAG) | Supplies customer history | context only |
-| LangGraph | Expresses workflow shape | orchestration |
-| Ollama · Mistral | Rewrites approved copy into Hinglish | wording only |
+| **Rule-based diagnosis** | Determines root cause from deterministic signals | **Authoritative** |
+| **Decision tree classifier** | Provides a recorded second opinion | **Advisory** |
+| **Probability engine** | Ranks policy-eligible actions by expected recovery value | **Proposes only** |
+| **Policy engine · stopping rules** | Enforces merchant limits, eligibility, and hard stops | **Authoritative** |
+| **Human approval gate** | Reviews and approves consequential actions above the autonomy threshold | **Execution authority** |
+| **Retrieval (RAG)** | Supplies customer history and supporting evidence | **Context only** |
+| **LangGraph** | Manages workflow state, transitions, retries, and orchestration | **Orchestration only** |
+| **Ollama · Mistral** | Rewrites approved copy into Hinglish without changing intent or facts | **Wording only** |
+| **Financial ledger** | Records recovery state using exact integer-paisa accounting | **System of record** |
 
+---
+
+## Authority Model
+
+```text
+
+Customer Context
+
+      │
+
+      ▼
+
+Rule-Based Diagnosis
+
+      │
+
+      ▼
+
+Decision Tree
+
+Second Opinion
+
+      │
+
+      ▼
+
+Probability Engine
+
+Rank Actions
+
+      │
+
+      ▼
+
+Policy Engine
+
+Hard Constraints
+
+      │
+
+      ├──────── Forbidden ────────► STOP
+
+      │
+
+      ▼
+
+Human Approval Gate
+
+      │
+
+      ├──────── Rejected ─────────► STOP
+
+      │
+
+      ▼
+
+Compliance Gate
+
+      │
+
+      ├──────── Failed ───────────► STOP
+
+      │
+
+      ▼
+
+Approved Action
+
+      │
+
+      ▼
+
+Execution
+
+      │
+
+      ▼
+
+Financial Ledger
+```
 The language model receives a script compliance has already approved, and its output is
 re-checked before use. If it is slow, offline, or invents a fact, the deterministic
 template is used unchanged. **A recovery run cannot fail because of it.**
